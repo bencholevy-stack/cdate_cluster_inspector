@@ -1,4 +1,4 @@
-const CACHE_NAME='dci-pwa-2.7.2';
+const CACHE_NAME='dci-pwa-2.7.6';
 const APP_SHELL=['./','./index.html','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png'];
 
 self.addEventListener('install',event=>{
@@ -12,6 +12,10 @@ self.addEventListener('activate',event=>{
     await Promise.all(keys.filter(k=>k.startsWith('dci-pwa-')&&k!==CACHE_NAME).map(k=>caches.delete(k)));
     await self.clients.claim();
   })());
+});
+
+self.addEventListener('message',event=>{
+  if(event.data?.type==='SKIP_WAITING') self.skipWaiting();
 });
 
 function openDB(){
