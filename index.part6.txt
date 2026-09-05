@@ -1,0 +1,272 @@
+totalAnalyzed} · Picking day ${t.dayBucket}</div></div>
+      <div class="detailPct">${t.relativePct}%<small>relative grade</small></div>
+    </div>
+    <div class="detailGrid">
+      <div class="detailBox"><div class="big">${t.rawUrgency.toFixed(1)}%</div><div class="small">Private urgency grade</div></div>
+      <div class="detailBox"><div class="big">${t.plantationAvgRaw.toFixed(1)}%</div><div class="small">Plantation avg grade</div></div>
+      <div class="detailBox"><div class="big">${(t.rawUrgency-t.plantationAvgRaw>=0?'+':'')+(t.rawUrgency-t.plantationAvgRaw).toFixed(1)}</div><div class="small">Difference vs average</div></div>
+      <div class="detailBox"><div class="big">Day ${t.dayBucket}</div><div class="small">Picking group</div></div>
+    </div>
+    <p class="sub" style="margin-top:11px"><b>Ranking basis:</b> ${t.basis}. The map % is relative; the values below are this tree's own measured composition.</p>
+    <div class="treePopupStats">
+      ${statHtml('green',p.green)}${statHtml('yellow',p.yellow,'Yellow / Khalal')}${statHtml('brown',p.brown)}${statHtml('dry',p.dry||0,'Dry reject')}${statHtml('gray',p.unknown,'Unknown')}
+    </div>
+    <div class="note" style="background:#f7faf6;border:1px solid var(--line);margin-top:10px">Plantation private averages: Yellow <b>${t.plantationAvgYellow.toFixed(1)}%</b> · Brown <b>${t.plantationAvgBrown.toFixed(1)}%</b>. Estimated fruit-equivalents in this tree view: valid <b>${(t.avg.fruitEq?.totalValid||0).toFixed(1)}</b> · dry/failed rejected <b>${(t.avg.fruitEq?.dry||0).toFixed(1)}</b>. Dry rejects are displayed but excluded from ripeness ranking.</div>`;
+  $('treeModal').classList.add('on');
+  try{history.pushState({dci:true,kind:'overlay',overlay:'tree',tab:APP.currentTab},'',location.href)}catch(e){}
+}
+function closeTreeDetails(fromBack=false){
+  $('treeModal').classList.remove('on');
+  if(!fromBack){try{history.back()}catch(e){}}
+}
+$('closeTreeModalBtn').onclick=()=>closeTreeDetails(false);
+$('treeModal').addEventListener('click',e=>{if(e.target===$('treeModal'))closeTreeDetails(false)});
+
+function renderMap1(){
+  computeTreeRankings();
+  document.querySelectorAll('[data-mapmode]').forEach(b=>b.classList.toggle('on',b.dataset.mapmode===(APP.settings.rankMode||'auto')));
+  const rows=APP.rows;if(!rows.length){$('map1Summary').textContent='Save plantation setup first.';return}
+  const c=$('map1'),R=22,gap=13,rowGap=22,marginX=42,marginY=38,maxN=Math.max(...rows.map(r=>r.count));
+  c.width=marginX*2+maxN*(R*2+gap);c.height=marginY*2+rows.length*(R*2+rowGap);
+  const ctx=c.getContext('2d');ctx.fillStyle='#fbfdfb';ctx.fillRect(0,0,c.width,c.height);
+  APP.map1HitAreas=[];let analyzed=0;
+  rows.forEach((row,ri)=>{
+    const y=marginY+ri*(R*2+rowGap)+R;
+    ctx.fillStyle='#218c55';ctx.font='bold 11px system-ui';ctx.textAlign='right';ctx.fillText(row.letter,marginX-12,y+4);
+    for(let i=1;i<=row.count;i++){
+      const key=row.letter+i,x=marginX+(i-1)*(R*2+gap)+R,res=getTreeResult(key),picked=(APP.treeStatus[key]||'unpicked')!=='unpicked';
+      let fill='#f3f6f1',stroke='#d3ddd1';
+      if(picked){fill='#bdc5be';stroke='#aab3ab'}
+      else if(res){analyzed++;fill=heatColor(res.relativePct);stroke='#8e845f'}
+      ctx.beginPath();ctx.arc(x,y,R,0,Math.PI*2);ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle=stroke;ctx.lineWidth=1.4;ctx.stroke();
+      if(res&&!picked){
+        ctx.fillStyle=res.relativePct>=72?'#fff':'#263228';ctx.font='900 11px system-ui';ctx.textAlign='center';ctx.fillText(res.relativePct+'%',x,y+4);
+        // day badge
+        ctx.fillStyle='#ffffff';ctx.beginPath();ctx.arc(x+R-3,y-R+3,8,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#758276';ctx.lineWidth=1;ctx.stroke();
+        ctx.fillStyle='#334138';ctx.font='900 8px system-ui';ctx.fillText(String(res.dayBucket),x+R-3,y-R+6);
+      }else if(picked){ctx.fillStyle='#6f776f';ctx.font='900 13px system-ui';ctx.textAlign='center';ctx.fillText('✓',x,y+4)}
+      // Small tree ID outside the circle, deliberately separate from the relative %.
+      ctx.fillStyle='#617067';ctx.font='700 8px system-ui';ctx.textAlign='center';ctx.fillText(key,x,y+R+11);
+      APP.map1HitAreas.push({key,x,y,r:R+5});
+    }
+  });
+  c.onclick=e=>{
+    const rect=c.getBoundingClientRect(),x=(e.clientX-rect.left)*c.width/rect.width,y=(e.clientY-rect.top)*c.height/rect.height;
+    const hit=APP.map1HitAreas.find(h=>Math.hypot(x-h.x,y-h.y)<=h.r);if(hit&&getTreeResult(hit.key))openTreeDetails(hit.key);
+  };
+  const total=Object.values(APP.results).filter(t=>t.tree&&t.avg).length;
+  const mode=(APP.settings.rankMode||'auto');
+  $('map1Summary').textContent=`${analyzed} analyzed trees · ranking mode: ${mode.toUpperCase()} · % inside circles = relative plantation urgency · small badge = picking day (${APP.treesPerDay} trees/day).`;
+}
+$('printMap1Btn').onclick=()=>window.print();
+
+function buildDaySelector(){
+  computeTreeRankings();
+  const maxDay=Math.max(1,...Object.values(APP.results).map(t=>t.dayBucket||1));
+  $('daySel').innerHTML='';
+  for(let d=1;d<=maxDay;d++){
+    const b=document.createElement('button');b.className='day'+(d===APP.selectedDay?' on':'');b.textContent='Day '+d;
+    b.onclick=()=>{APP.selectedDay=d;renderRoute()};
+    $('daySel').appendChild(b);
+  }
+}
+function dayTrees(day){
+  return Object.values(APP.results).filter(t=>t.tree&&t.dayBucket===day&&(APP.treeStatus[t.tree]||'unpicked')==='unpicked')
+    .sort((a,b)=>a.rank-b.rank).map(t=>t.tree);
+}
+function renderRoute(){
+  computeTreeRankings();buildDaySelector();
+  if(!APP.rows.length){$('routeSummary').textContent='Save plantation setup first.';return}
+  const today=dayTrees(APP.selectedDay),todaySet=new Set(today);
+  const c=$('routeCanvas'),R=17,gap=10,rowGap=14,margin=34,maxN=Math.max(...APP.rows.map(r=>r.count));
+  c.width=margin*2+maxN*(R*2+gap);c.height=margin*2+APP.rows.length*(R*2+rowGap)+45;
+  const ctx=c.getContext('2d');ctx.fillStyle='#fbfdfb';ctx.fillRect(0,0,c.width,c.height);
+  const pos={};
+  APP.rows.forEach((row,ri)=>{
+    const y=margin+ri*(R*2+rowGap)+R;
+    ctx.fillStyle='#218c55';ctx.font='bold 11px system-ui';ctx.textAlign='right';ctx.fillText(row.letter,margin-7,y+4);
+    for(let i=1;i<=row.count;i++)pos[row.letter+i]={x:margin+(i-1)*(R*2+gap)+R,y};
+  });
+  // physical row-wise route through today's selected trees
+  const ordered=[];
+  let forward=true;
+  APP.rows.forEach(row=>{
+    const arr=today.filter(k=>k[0]===row.letter).sort((a,b)=>parseInt(a.slice(1))-parseInt(b.slice(1)));
+    if(!forward)arr.reverse();
+    ordered.push(...arr);forward=!forward;
+  });
+  ctx.strokeStyle='rgba(33,140,85,.55)';ctx.lineWidth=2;
+  for(let i=0;i<ordered.length-1;i++){
+    const a=pos[ordered[i]],b=pos[ordered[i+1]];if(!a||!b)continue;
+    ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
+  }
+  APP.rows.forEach(row=>{for(let i=1;i<=row.count;i++){
+    const key=row.letter+i,p=pos[key],st=APP.treeStatus[key]||'unpicked',idx=ordered.indexOf(key);
+    ctx.beginPath();ctx.arc(p.x,p.y,R,0,Math.PI*2);
+    if(st!=='unpicked'){ctx.fillStyle='#c3cbc4';ctx.strokeStyle='#aeb7af'}
+    else if(todaySet.has(key)){ctx.fillStyle='#dff3e7';ctx.strokeStyle='#218c55'}
+    else{ctx.fillStyle='#edf3eb';ctx.strokeStyle='#d0dbcf'}
+    ctx.fill();ctx.lineWidth=1.5;ctx.stroke();
+    ctx.fillStyle='#243026';ctx.font='bold 8px system-ui';ctx.textAlign='center';ctx.fillText(st!=='unpicked'?'✓':key,p.x,p.y+3);
+    if(idx>=0){
+      ctx.fillStyle='#218c55';ctx.beginPath();ctx.arc(p.x+R-3,p.y-R+3,7,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='white';ctx.font='bold 7px system-ui';ctx.fillText(idx+1,p.x+R-3,p.y-R+5);
+    }
+  }});
+  $('routeSummary').textContent=`Day ${APP.selectedDay}: ${ordered.length} trees currently unpicked · Day 1 is the next picking day; later numbers follow relative plantation ranking.`;
+  c.onclick=e=>{
+    if(!APP.editRoute)return;
+    const rect=c.getBoundingClientRect(),x=(e.clientX-rect.left)*c.width/rect.width,y=(e.clientY-rect.top)*c.height/rect.height;
+    for(const [k,p] of Object.entries(pos)){
+      if(Math.hypot(x-p.x,y-p.y)<=R+3){
+        APP.treeStatus[k]=(APP.treeStatus[k]||'unpicked')==='unpicked'?'picked':'unpicked';saveLocal();renderRoute();renderMap1();return;
+      }
+    }
+  };
+}
+$('toggleEditBtn').onclick=()=>{
+  APP.editRoute=!APP.editRoute;$('toggleEditBtn').textContent='Manual edit: '+(APP.editRoute?'ON':'OFF');
+  toast(APP.editRoute?'Tap trees to toggle picked/unpicked':'Manual editing off');
+};
+$('completeDayBtn').onclick=()=>{
+  const trees=dayTrees(APP.selectedDay);
+  if(!trees.length){toast('No unpicked trees in this day');return}
+  if(!confirm(`Mark ${trees.length} trees in Day ${APP.selectedDay} as picked?`))return;
+  trees.forEach(k=>APP.treeStatus[k]='picked');saveLocal();renderRoute();renderMap1();toast('Day completed');
+};
+$('printRouteBtn').onclick=()=>window.print();
+
+
+// ---- PWA install, update, and Gallery Share Target ----
+const DCI_PWA_VERSION='2.7.0';
+let deferredInstallPrompt=null;
+let pwaReloading=false;
+
+function isStandalonePWA(){
+  return window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator.standalone===true;
+}
+function setPwaStatus(text){
+  const el=$('pwaStatusPill'); if(el) el.textContent=text;
+}
+function showSharedImportStatus(text, ok=true){
+  const el=$('sharedImportStatus'); if(!el) return;
+  el.style.display='block';
+  el.style.background=ok?'#eef8f1':'#fff1f1';
+  el.style.border='1px solid '+(ok?'#c8e5d0':'#efb4b4');
+  el.textContent=text;
+}
+
+window.addEventListener('beforeinstallprompt', e=>{
+  e.preventDefault(); deferredInstallPrompt=e;
+  const b=$('installPwaBtn'); if(b) b.style.display='inline-flex';
+  setPwaStatus('Ready to install in Chrome');
+});
+
+$('installPwaBtn').onclick=async()=>{
+  if(deferredInstallPrompt){
+    deferredInstallPrompt.prompt();
+    try{await deferredInstallPrompt.userChoice}catch(_){ }
+    deferredInstallPrompt=null;
+    $('installPwaBtn').style.display='none';
+    setPwaStatus('Installed / installation requested');
+  }else{
+    alert('In Chrome, open the ⋮ menu and choose “Install app” or “Add to Home screen”. Install once so Date Cluster Inspector appears in Android Share.');
+  }
+};
+
+function openShareDB(){
+  return new Promise((resolve,reject)=>{
+    const req=indexedDB.open('dci-share-db',1);
+    req.onupgradeneeded=()=>{
+      const db=req.result;
+      if(!db.objectStoreNames.contains('pending')) db.createObjectStore('pending',{keyPath:'id',autoIncrement:true});
+    };
+    req.onsuccess=()=>resolve(req.result);
+    req.onerror=()=>reject(req.error);
+  });
+}
+async function drainSharedPhotos(){
+  let db;
+  try{
+    db=await openShareDB();
+    const rows=await new Promise((resolve,reject)=>{
+      const tx=db.transaction('pending','readonly');
+      const req=tx.objectStore('pending').getAll();
+      req.onsuccess=()=>resolve(req.result||[]);
+      req.onerror=()=>reject(req.error);
+    });
+    if(!rows.length){db.close();return 0;}
+    const files=rows.map((r,i)=>new File([r.blob],r.name||`Gallery_${Date.now()}_${i+1}.jpg`,{
+      type:r.type||r.blob?.type||'image/jpeg',lastModified:r.lastModified||Date.now()
+    }));
+    const count=queuePickedFiles(files,'Gallery share');
+    await new Promise((resolve,reject)=>{
+      const tx=db.transaction('pending','readwrite');
+      tx.objectStore('pending').clear();
+      tx.oncomplete=resolve; tx.onerror=()=>reject(tx.error); tx.onabort=()=>reject(tx.error);
+    });
+    db.close();
+    showSharedImportStatus(`${count} photo${count===1?'':'s'} received from Gallery and added to the queue.`,true);
+    return count;
+  }catch(err){
+    try{db?.close()}catch(_){ }
+    showSharedImportStatus('Could not read photos shared from Gallery: '+(err?.message||String(err)),false);
+    return 0;
+  }
+}
+
+function showUpdateBanner(reg){
+  if(document.getElementById('dciUpdateBanner')) return;
+  const bar=document.createElement('div');
+  bar.id='dciUpdateBanner';
+  bar.style.cssText='position:fixed;left:12px;right:12px;bottom:12px;z-index:9999;background:#1d2b20;color:white;border-radius:14px;padding:12px 14px;box-shadow:0 10px 30px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:space-between;gap:12px;font:600 14px system-ui';
+  bar.innerHTML='<span>New Date Cluster Inspector version available.</span><button id="dciUpdateNow" style="border:0;border-radius:10px;padding:9px 12px;font-weight:800;background:white;color:#1d2b20">Update now</button>';
+  document.body.appendChild(bar);
+  document.getElementById('dciUpdateNow').onclick=()=>reg.waiting?.postMessage({type:'SKIP_WAITING'});
+}
+
+async function setupPWA(){
+  if(isStandalonePWA()) setPwaStatus('Installed · Gallery Share enabled');
+  else setPwaStatus('Install once to receive Gallery shares');
+
+  if(!('serviceWorker' in navigator)){
+    setPwaStatus('Service worker unavailable in this browser'); return;
+  }
+  try{
+    const reg=await navigator.serviceWorker.register('./sw.js',{scope:'./'});
+    if(reg.waiting && navigator.serviceWorker.controller) showUpdateBanner(reg);
+    reg.addEventListener('updatefound',()=>{
+      const nw=reg.installing; if(!nw) return;
+      nw.addEventListener('statechange',()=>{
+        if(nw.state==='installed' && navigator.serviceWorker.controller) showUpdateBanner(reg);
+      });
+    });
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{
+      if(pwaReloading) return; pwaReloading=true; location.reload();
+    });
+    try{await reg.update()}catch(_){ }
+    // If launched by Android share target, the service worker stores files before redirect.
+    await drainSharedPhotos();
+  }catch(err){
+    setPwaStatus('PWA setup failed');
+    showSharedImportStatus('PWA setup error: '+(err?.message||String(err)),false);
+  }
+}
+window.addEventListener('load',()=>setupPWA());
+
+loadLocal();
+// Safety migration: old versions used permissive brown defaults that caused false positives.
+if((APP.settings.brownBright??.56)>.60)APP.settings.brownBright=.56;
+if((APP.settings.brownDom??14)<12)APP.settings.brownDom=14;
+APP.settings.brownPresenceMin=Math.max(1.5,APP.settings.brownPresenceMin||0);
+if(APP.settings.autoROI===undefined)APP.settings.autoROI=true;
+APP.currentTab='setup';initBackGuard();refreshTrainingSummary();
+$('nrows').value=APP.rows.length||10;
+$('defaultTrees').value=APP.rows[0]?.count||20;
+$('treesPerDay').value=APP.treesPerDay;
+buildRowsTable();
+if(APP.rows.length)APP.rows.forEach(r=>{const el=$('row-'+r.letter);if(el)el.value=r.count});
+applySettingsUI();renderCalSummary();updatePlantationPill();computeTreeRankings();
+</script>
+</body>
+</html>
