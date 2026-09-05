@@ -1,0 +1,283 @@
+d;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:2px 0 12px;border-bottom:1px solid var(--line)}
+.detailPct{font-size:34px;line-height:1;font-weight:950;color:var(--green);text-align:right}
+.detailPct small{display:block;font-size:9px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;margin-top:5px}
+.detailGrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:12px}
+.detailBox{border:1px solid var(--line);border-radius:11px;padding:10px;background:#fbfdfb}
+.detailBox .big{font-size:18px;font-weight:900}
+.detailBox .small{font-size:9px;color:var(--muted);font-weight:800;letter-spacing:.06em;text-transform:uppercase;margin-top:3px}
+.treePopupStats{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:10px}
+.treePopupStats .stat{padding:8px}
+.treePopupStats .stat .v{font-size:16px}
+@media(max-width:600px){.treePopupStats{grid-template-columns:repeat(2,1fr)}.detailGrid{grid-template-columns:1fr 1fr}}
+
+@media(max-width:760px){
+  .grid2,.grid3{grid-template-columns:1fr}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .framegrid{grid-template-columns:1fr}
+  h1{font-size:21px}
+  .brand span.label{display:none}
+  .topbar{padding:0 12px}
+  .tab{font-size:10px}
+}
+@media print{
+  .shell,.noprint{display:none!important}
+  body{background:white}
+  main{max-width:none;padding:0}
+  .card{box-shadow:none;border:none}
+}
+
+.galleryPrimary{background:#2f9f62!important;color:#fff!important;border-color:#2f9f62!important}
+.importCard{border:1px solid var(--line);border-radius:14px;padding:12px;background:#fbfdfb}
+.importCardTitle{font-weight:900;font-size:13px;margin-bottom:4px}
+.importCard .sub{margin-bottom:10px}
+.importActions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.importActions .btn{min-height:46px}
+@media(max-width:620px){.importActions{grid-template-columns:1fr}.importActions .btn{min-height:52px;font-size:13px}}
+</style>
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="theme-color" content="#f4f7f2">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="application-name" content="Date Cluster Inspector">
+</head>
+<body>
+<div class="shell">
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo">🌴</div>
+      <div>
+        <span class="label" id="brandName">Date Cluster Inspector</span>
+        <small>LOCAL VISION · PWA 2.7.0</small>
+      </div>
+    </div>
+    <div class="langs">
+      <button class="lang on" data-lang="en">EN</button>
+      <button class="lang" data-lang="he">HE</button>
+      <button class="lang" data-lang="ar">AR</button>
+      <button class="lang" data-lang="th">TH</button>
+    </div>
+  </div>
+  <div class="tabs">
+    <button class="tab on" data-tab="setup">⚙ Setup</button>
+    <button class="tab" data-tab="analyze">📷 Analyze</button>
+    <button class="tab" data-tab="map1">🌡 Ripeness</button>
+    <button class="tab" data-tab="route">🗺 Route</button>
+  </div>
+</div>
+
+<main>
+<section class="view on" id="view-setup">
+  <div class="hero">
+    <div>
+      <h1>Plantation & local vision setup</h1>
+      <p class="sub">No API keys. No image uploads. Frames are processed locally: cluster ROI first, then fruit-equivalent counting and ripeness classification inside those cluster zones.</p>
+    </div>
+    <div class="pill">● Private / local</div>
+  </div>
+
+  <div class="grid2">
+    <details class="settingsDetails">
+      <summary>Plantation layout</summary>
+      <div class="detailsBody">
+      <label class="lbl">Number of rows</label>
+      <input type="number" id="nrows" min="1" max="26" value="10">
+      <label class="lbl">Default trees per row</label>
+      <input type="number" id="defaultTrees" min="1" max="999" value="20">
+      <div class="btnrow" style="margin-top:10px">
+        <button class="btn secondary" id="buildRowsBtn">Build row table</button>
+      </div>
+      <label class="lbl">Trees per picking day</label>
+      <input type="number" id="treesPerDay" min="1" value="10">
+      <label class="lbl">Trees per row</label>
+      <div class="rows" id="rowsBox"></div>
+      <div class="btnrow" style="margin-top:12px">
+        <button class="btn primary" id="saveSetupBtn">Save plantation</button>
+        <button class="btn danger" id="resetPickingBtn">Reset picking status</button>
+      </div>
+      </div>
+    </details>
+
+    <details class="settingsDetails">
+      <summary>Vision behavior</summary>
+      <div class="detailsBody">
+      <div class="note ok"><b>Brown false-positive guard.</b> Brown must pass strict color rules <b>and</b> form repeated compact fruit-like regions. Thin rachis, isolated shadows and tiny warm patches are rejected. Uncertain areas become <b>Unknown</b>.</div>
+
+      <label class="lbl">Heat-map ranking logic</label>
+      <div class="segmented" id="rankModeSeg">
+        <button class="seg on" data-rankmode="auto">Auto stage</button>
+        <button class="seg" data-rankmode="yellow">Yellow</button>
+        <button class="seg" data-rankmode="brown">Brown</button>
+      </div>
+      <p class="sub" style="font-size:10px;margin-top:6px">Auto: green→yellow uses more yellow = more urgent; once true brown is present, yellow→brown uses more brown = more urgent.</p>
+
+      <div class="switchRow">
+        <div><b style="font-size:12px">Auto cluster ROI</b><div class="sub" style="font-size:10px">Find the dense fruit strip first; analyze only those cluster zones, not the whole frame.</div></div>
+        <div class="toggle on" id="autoRoiToggle"></div>
+      </div>
+
+      <label class="lbl">Analysis crop</label>
+      <div class="segmented" id="cropSeg">
+        <button class="seg" data-crop="1">Full frame</button>
+        <button class="seg on" data-crop=".85">Center 85%</button>
+        <button class="seg" data-crop=".70">Center 70%</button>
+      </div>
+
+      <label class="lbl">Shadow rejection</label>
+      <div class="sliderRow">
+        <input type="range" id="shadowCut" min="5" max="45" value="18">
+        <div class="sliderVal"><span id="shadowVal">18</span>% V</div>
+      </div>
+
+      <label class="lbl">Minimum color saturation</label>
+      <div class="sliderRow">
+        <input type="range" id="satCut" min="5" max="50" value="16">
+        <div class="sliderVal"><span id="satVal">16</span>% S</div>
+      </div>
+
+      <label class="lbl">Brown maximum brightness</label>
+      <div class="sliderRow">
+        <input type="range" id="brownBright" min="35" max="80" value="56">
+        <div class="sliderVal"><span id="brownBrightVal">56</span>% V</div>
+      </div>
+
+      <label class="lbl">Brown red dominance</label>
+      <div class="sliderRow">
+        <input type="range" id="brownDom" min="0" max="30" value="14">
+        <div class="sliderVal">R ≥ G + <span id="brownDomVal">14</span></div>
+      </div>
+
+      <label class="lbl">Frame samples per video</label>
+      <select id="framesPerVideo">
+        <option value="2">2 best frames</option>
+        <option value="3" selected>3 best frames</option>
+        <option value="4">4 best frames</option>
+        <option value="5">5 best frames</option>
+      </select>
+
+      <div class="switchRow">
+        <div><b style="font-size:12px">Strict brown gate</b><div class="sub" style="font-size:10px">Require dark/warm evidence before brown can be reported.</div></div>
+        <div class="toggle on" id="strictBrownToggle"></div>
+      </div>
+
+      <div class="btnrow" style="margin-top:12px">
+        <button class="btn secondary" id="resetVisionBtn">Reset vision defaults</button>
+      </div>
+      </div>
+    </details>
+  </div>
+
+  <details class="settingsDetails">
+    <summary>Optional visual calibration</summary>
+    <div class="detailsBody">
+    <p class="sub">After you analyze a photo, open a debug frame, select a class below, and click representative fruit pixels. Samples are stored locally and bias classification toward your camera, variety and lighting.</p>
+    <div class="calBtns">
+      <button class="calClass on" data-class="yellow">🟡 Yellow fruit</button>
+      <button class="calClass" data-class="green">🟢 Green fruit</button>
+      <button class="calClass" data-class="yellow">🟠 Warm yellow / amber</button>
+      <button class="calClass" data-class="brown">🟤 Brown fruit</button>
+      <button class="calClass" data-class="ignore">⚪ Ignore/background</button>
+      <button class="btn secondary" id="clearCalibrationBtn">Clear samples</button>
+    </div>
+    <div id="calSummary" class="note" style="background:#f7faf6;border:1px solid var(--line);margin-top:10px"></div>
+    </div>
+  </details>
+
+  <details class="settingsDetails">
+    <summary>Correction & learning dataset</summary>
+    <div class="detailsBody">
+    <p class="sub">Open any analyzed frame and press <b>Correct / Teach</b>. Tap fruit centers to label them. Partial/occluded fruits still count as one. Saved corrections remain on this device and build the training set for the future local fruit detector.</p>
+    <div class="datasetGrid">
+      <div class="datasetBox"><b id="dsFrames">0</b><span>Corrected frames</span></div>
+      <div class="datasetBox"><b id="dsFruits">0</b><span>Fruit labels</span></div>
+      <div class="datasetBox"><b id="dsPartial">0</b><span>Partial fruits</span></div>
+      <div class="datasetBox"><b id="dsNet">0</b><span>Black-net frames</span></div>
+    </div>
+    <div class="btnrow" style="margin-top:10px">
+      <button class="btn secondary" id="exportTrainingBtn">Export training dataset</button>
+      <button class="btn danger" id="clearTrainingBtn">Clear training dataset</button>
+    </div>
+    <div class="note ok" style="margin-top:10px;margin-bottom:0"><b>Immediate learning:</b> Green/Yellow/Brown/Not-fruit corrections also update the local color references immediately. <b>Detector learning:</b> the saved object labels are retained for training the dedicated local fruit detector.</div>
+    </div>
+  </details>
+</section>
+
+<section class="view" id="view-analyze">
+  <div class="hero">
+    <div>
+      <h1>Local cluster analysis</h1>
+      <p class="sub">Upload photos or videos. Files never leave the computer. Diagnostic outlines mean accepted fruit-like regions only; unmarked areas are ignored. Pinch the opened image to zoom during testing.</p>
+    </div>
+    <div class="pill" id="plantationPill">No plantation saved</div>
+  </div>
+
+  <div class="card" id="galleryImportCard">
+    <h2 style="margin-bottom:6px">Import from Gallery</h2>
+    <p class="sub" style="margin:0 0 12px"><b>Gallery → select photos → Share → Date Cluster Inspector.</b> For a whole album, open that album, use Select all, then Share. The selected photos are added directly to this same analysis queue.</p>
+    <div class="btnrow" style="gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <button class="btn primary" id="installPwaBtn" type="button" style="display:none">Install Date Cluster Inspector</button>
+      <span class="pill" id="pwaStatusPill">Checking app status…</span>
+    </div>
+    <div id="sharedImportStatus" class="note" style="display:none;margin-bottom:10px"></div>
+    <details style="margin-top:8px">
+      <summary style="cursor:pointer;font-weight:700;color:#56705d">Direct picker fallback</summary>
+      <div class="drop" id="mediaDrop" style="position:relative;cursor:pointer;margin-top:8px">
+        <input type="file" id="mediaInput" accept="image/*" multiple
+               style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;z-index:3">
+        <div class="icon">🖼️</div>
+        <strong>Choose photos directly</strong>
+        <span>Fallback only. If Chrome returns one photo, use Gallery → Share instead.</span>
+      </div>
+    </details>
+    <div id="pickerDiagnostic" style="display:none;margin-top:10px;padding:12px 14px;border-radius:10px;border:1px solid #efb4b4;background:#fff1f1;color:#8b1e1e;font-size:13px;line-height:1.45"></div>
+    <div id="fileListWrap" style="display:none">
+      <div class="sumbar" id="queueSummary" style="margin-bottom:8px">0 files queued</div>
+      <div class="filelist" id="fileList"></div>
+      <div class="btnrow" style="margin-top:10px">
+        <button class="btn primary" id="runBtn">Analyze locally</button>
+        <button class="btn secondary" id="clearFilesBtn">Clear files</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="progressCard" style="display:none">
+    <h2>Analysis progress</h2>
+    <div class="progress"><div id="progressFill"></div></div>
+    <p class="sub" id="progressText" style="margin-top:8px">Preparing…</p>
+  </div>
+
+  <div class="card" id="sessionSummaryCard" style="display:none">
+    <h2>Session summary</h2>
+    <div class="stats">
+      <div class="stat"><div class="v green" id="sumGreen">0%</div><div class="k">Green</div></div>
+      <div class="stat"><div class="v yellow" id="sumYellow">0%</div><div class="k">Yellow / Khalal</div></div>
+      <div class="stat"><div class="v brown" id="sumBrown">0%</div><div class="k">Brown</div></div>
+      <div class="stat"><div class="v dry" id="sumDry">0%</div><div class="k">Dry reject</div></div>
+      <div class="stat"><div class="v gray" id="sumUnknown">0%</div><div class="k">Unknown</div></div>
+    </div>
+    <div class="btnrow" style="margin-top:12px">
+      <button class="btn secondary" id="exportCsvBtn">Export results CSV</button>
+    </div>
+  </div>
+
+  <div id="resultsList"></div>
+</section>
+
+<section class="view" id="view-map1">
+  <div class="hero">
+    <div>
+      <h1>Plantation heat map</h1>
+      <p class="sub"><b>The percentage inside each tree is relative to the entire plantation</b> — 100% is the most urgent analyzed tree. Tap a tree to see its own fruit-color percentages.</p>
+    </div>
+    <button class="btn secondary noprint" id="printMap1Btn">Print</button>
+  </div>
+  <div class="card">
+    <div class="mapModeBar noprint">
+      <span class="lbl">Ranking</span>
+      <button class="day" data-mapmode="auto">Auto stage</button>
+      <button class="day" data-mapmode="yellow">Yellow</button>
+      <button class="day" data-mapmode="brown">Brown</button>
+    </div>
+    <div class="mapHint">Circle color and the large % are <b>relative plantation urgency</b>. Small ID is outside the circle. The small numbered badge is the picking day: 1 = next picking day, 2 = the following day, etc., using your configured trees/day.</div>
+    <div class="legend">
+      <div class="leg"><div class="dot" style="background:#dcefdc"></div>Low relative urgency</div>
+      <div class="leg"><div class="dot" style="background:#f4df73"></div>Middle</div>
+      <div class="
