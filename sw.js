@@ -1,5 +1,5 @@
 const CACHE_NAME='dci-pwa-2.7.0';
-const APP_SHELL=['./','./index.html','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png'];
+const APP_SHELL=['./','./index.html','./index.part1.txt','./index.part2.txt','./index.part3.txt','./index.part4.txt','./index.part5.txt','./index.part6.txt','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png'];
 
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.addAll(APP_SHELL)));
