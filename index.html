@@ -1,1 +1,70 @@
-<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><title>Date Cluster Inspector</title></head><body><p style="font-family:system-ui;padding:20px">Loading Date Cluster Inspector…</p><script>(async()=>{try{const ps=["./index.part1.txt","./index.part2.txt","./index.part3.txt","./index.part4.txt","./index.part5.txt","./index.part6.txt"];const r=await Promise.all(ps.map(p=>fetch(p+'?v=272',{cache:'no-store'}).then(x=>{if(!x.ok)throw new Error(p+' '+x.status);return x.text()})));let html=r.join('').replaceAll('2.7.0','2.7.2').replaceAll('2.7.1','2.7.2');html=html.replace(/<meta\s+http-equiv=["']Content-Security-Policy["'][^>]*>/ig,'');html=html.replace('</head>','<style>#mediaDrop #mediaInput{position:static!important;inset:auto!important;display:block!important;width:100%!important;height:52px!important;opacity:1!important;cursor:pointer!important;z-index:auto!important;margin:10px 0 4px!important;padding:8px!important;border:1px solid #b8cbb9!important;border-radius:10px!important;background:#fff!important}#mediaDrop .icon,#mediaDrop strong,#mediaDrop span{pointer-events:none}</style></head>');document.open();document.write(html);document.close()}catch(e){document.body.innerHTML='<pre style="white-space:pre-wrap;font-family:system-ui;padding:20px">Could not load Date Cluster Inspector: '+String(e)+'</pre>'}})()</script></body></html>
+<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><title>Date Cluster Inspector</title></head><body><p style="font-family:system-ui;padding:20px">Loading Date Cluster Inspector…</p><script>(async()=>{try{const ps=["./index.part1.txt","./index.part2.txt","./index.part3.txt","./index.part4.txt","./index.part5.txt","./index.part6.txt"];const r=await Promise.all(ps.map(p=>fetch(p+'?v=273',{cache:'no-store'}).then(x=>{if(!x.ok)throw new Error(p+' '+x.status);return x.text()})));let html=r.join('').replaceAll('2.7.0','2.7.3').replaceAll('2.7.1','2.7.3').replaceAll('2.7.2','2.7.3');html=html.replace(/<meta\s+http-equiv=["']Content-Security-Policy["'][^>]*>/ig,'');html=html.replace('</head>',`<style>
+#mediaDrop{position:static!important;cursor:default!important;padding:14px!important}
+#mediaDrop #mediaInput{position:static!important;inset:auto!important;display:block!important;width:100%!important;height:54px!important;opacity:1!important;cursor:pointer!important;z-index:auto!important;margin:10px 0 4px!important;padding:8px!important;border:1px solid #b8cbb9!important;border-radius:10px!important;background:#fff!important}
+#installPwaBtn{display:none!important}
+#dciOneAction{width:100%;min-height:54px;font-size:15px;margin:10px 0 8px}
+#dciActionHint{font-size:12px;line-height:1.45;color:#68806c;margin:0 0 10px}
+</style></head>`);html=html.replace('</body>',`<script>
+(()=>{
+  const CHROME_URL='https://bencholevy-stack.github.io/cdate_cluster_inspector/?v=273';
+  const CHROME_INTENT='intent://bencholevy-stack.github.io/cdate_cluster_inspector/?v=273#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=https%3A%2F%2Fbencholevy-stack.github.io%2Fcdate_cluster_inspector%2F%3Fv%3D273;end';
+  let installEvent=null;
+  const standalone=()=>window.matchMedia?.('(display-mode: standalone)')?.matches||window.navigator.standalone===true;
+  const actionBtn=()=>document.getElementById('dciOneAction');
+  const hint=()=>document.getElementById('dciActionHint');
+  function refreshAction(){
+    const b=actionBtn(); if(!b)return;
+    if(standalone()){
+      b.textContent='UPDATE APP';
+      if(hint())hint().textContent='One press checks for the newest version and reloads it.';
+    }else if(installEvent){
+      b.textContent='INSTALL GALLERY IMPORT';
+      if(hint())hint().textContent='Install once. After that Gallery can send many selected photos directly to Date Cluster Inspector.';
+    }else{
+      b.textContent='OPEN IN CHROME';
+      if(hint())hint().textContent='This opens the same app in Chrome. Then this same button changes to Install.';
+    }
+  }
+  async function updateApp(){
+    const b=actionBtn(); if(b){b.disabled=true;b.textContent='UPDATING…'}
+    try{
+      const reg=await navigator.serviceWorker?.getRegistration('./');
+      if(reg){
+        await reg.update();
+        if(reg.waiting){reg.waiting.postMessage({type:'SKIP_WAITING'});return}
+        if(reg.installing){
+          await new Promise(resolve=>{
+            const w=reg.installing; const done=()=>{if(w.state==='installed'||w.state==='activated'||w.state==='redundant')resolve()};
+            w.addEventListener('statechange',done);setTimeout(resolve,3500);
+          });
+          if(reg.waiting){reg.waiting.postMessage({type:'SKIP_WAITING'});return}
+        }
+      }
+    }catch(_){ }
+    location.replace('./?v='+Date.now());
+  }
+  async function oneAction(){
+    if(standalone()){await updateApp();return}
+    if(installEvent){
+      const ev=installEvent; installEvent=null;
+      try{ev.prompt();await ev.userChoice}catch(_){ }
+      setTimeout(refreshAction,400);return;
+    }
+    try{location.href=CHROME_INTENT}catch(_){location.href=CHROME_URL}
+  }
+  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEvent=e;refreshAction()});
+  window.addEventListener('appinstalled',()=>setTimeout(refreshAction,300));
+  window.addEventListener('load',()=>{
+    const card=document.getElementById('galleryImportCard');
+    if(card&&!document.getElementById('dciOneAction')){
+      const h2=card.querySelector('h2');
+      const b=document.createElement('button');b.id='dciOneAction';b.type='button';b.className='btn primary';b.textContent='OPEN IN CHROME';b.onclick=oneAction;
+      const p=document.createElement('p');p.id='dciActionHint';
+      h2?.insertAdjacentElement('afterend',b);b.insertAdjacentElement('afterend',p);
+    }
+    const old=document.getElementById('installPwaBtn');if(old)old.style.display='none';
+    const details=card?.querySelector('details');if(details){details.open=true;const s=details.querySelector('summary');if(s)s.textContent='Choose photos directly (single-photo fallback if Android limits selection)'}
+    refreshAction();
+  });
+})();
+<\/script></body>`);document.open();document.write(html);document.close()}catch(e){document.body.innerHTML='<pre style="white-space:pre-wrap;font-family:system-ui;padding:20px">Could not load Date Cluster Inspector: '+String(e)+'</pre>'}})()</script></body></html>
