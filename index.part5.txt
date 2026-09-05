@@ -1,0 +1,189 @@
+key]:null}
+
+$('exportCsvBtn').onclick=()=>{
+  const rows=[['Tree','Side','Green %','Yellow/Khalal %','Brown %','Dry reject %','Unknown %','Est. valid fruit equivalents','Est. dry fruit equivalents','Typical fruit short side px','ROI coverage %','Confidence','Private urgency grade','Relative plantation %','Rank','Day']];
+  Object.values(APP.results).filter(t=>t.tree).sort((a,b)=>(a.rank||999)-(b.rank||999)).forEach(t=>{
+    for(const [side,r] of Object.entries(t.sides||{})){
+      rows.push([t.tree,side,r.pct.green,r.pct.yellow,r.pct.brown,r.pct.dry,r.pct.unknown,r.fruitEq?.totalValid||0,r.fruitEq?.dry||0,r.fruitEq?.typicalShort||0,(r.roiCoverage||0)*100,r.confidence,t.rawUrgency??'',t.relativePct??'',t.rank||'',t.dayBucket||'']);
+    }
+  });
+  const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download='date-cluster-local-results.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
+
+function applyViewerTransform(){
+  const st=$('viewerStage');if(!st)return;
+  st.style.transform=`translate(${APP.viewer.panX}px,${APP.viewer.panY}px) scale(${APP.viewer.zoom})`;
+  $('zoomRead').textContent=Math.round(APP.viewer.zoom*100)+'%';
+}
+function resetViewerTransform(){APP.viewer.zoom=1;APP.viewer.panX=0;APP.viewer.panY=0;APP.viewer.pointers=new Map();APP.viewer.lastPan=null;applyViewerTransform();}
+function setViewerZoom(z){
+  APP.viewer.zoom=Math.max(1,Math.min(8,z));
+  if(APP.viewer.zoom===1){APP.viewer.panX=0;APP.viewer.panY=0;}
+  applyViewerTransform();
+}
+function openViewer(src,raw,title,frameRef=null,recRef=null){
+  APP.viewer.src=src;APP.viewer.rawSrc=raw;APP.viewer.calibrating=false;APP.viewer.teaching=false;
+  APP.viewer.frameRef=frameRef;APP.viewer.recRef=recRef;APP.viewer.corrections=(frameRef?.manualCorrections||[]).map(x=>({...x}));
+  APP.viewer.teachCondition=frameRef?.teachCondition||'normal';APP.viewer.teachComplete=!!frameRef?.manualTruth;
+  $('teachCondition').value=APP.viewer.teachCondition;$('teachComplete').checked=APP.viewer.teachComplete;$('teachPartial').checked=false;
+  $('viewerImg').src=src;$('viewerTitle').textContent=title||'Debug frame';
+  $('viewerBody').classList.remove('calibrating','teaching');$('teachPanel').classList.remove('on');$('calibrateHereBtn').textContent='Calibrate color';$('teachHereBtn').textContent='Correct / Teach';
+  resetViewerTransform();$('viewerModal').classList.add('on');updateTeachStatus();
+  try{history.pushState({dci:true,kind:'overlay',overlay:'viewer',tab:APP.currentTab},'',location.href)}catch(e){}
+}
+$('zoomInBtn').onclick=()=>setViewerZoom(APP.viewer.zoom*1.35);
+$('zoomOutBtn').onclick=()=>setViewerZoom(APP.viewer.zoom/1.35);
+$('zoomResetBtn').onclick=resetViewerTransform;
+$('closeViewerBtn').onclick=()=>{if($('viewerModal').classList.contains('on')){try{history.back()}catch(e){$('viewerModal').classList.remove('on')}}};
+$('viewerModal').addEventListener('click',e=>{if(e.target===$('viewerModal')){try{history.back()}catch(err){$('viewerModal').classList.remove('on')}}});
+$('calibrateHereBtn').onclick=()=>{
+  if(APP.viewer.teaching){toast('Exit Correct / Teach mode first');return;}
+  APP.viewer.calibrating=!APP.viewer.calibrating;
+  $('calibrateHereBtn').textContent=APP.viewer.calibrating?'Calibration ON':'Calibrate color';
+  $('viewerBody').classList.toggle('calibrating',APP.viewer.calibrating);
+  resetViewerTransform();
+  if(APP.viewer.calibrating && APP.viewer.rawSrc)$('viewerImg').src=APP.viewer.rawSrc;
+  else $('viewerImg').src=APP.viewer.src;
+};
+const TEACH_COLORS={green:'#22a65b',yellow:'#e1b400',brown:'#8a5833',dry:'#78668f',unknown:'#8b9790',notfruit:'#d44c4c'};
+function renderTeachImage(){
+  if(!APP.viewer.teaching||!APP.viewer.rawSrc){$('viewerImg').src=APP.viewer.src;return;}
+  const base=new Image();
+  base.onload=()=>{
+    const c=document.createElement('canvas');c.width=base.naturalWidth;c.height=base.naturalHeight;const ctx=c.getContext('2d');ctx.drawImage(base,0,0);
+    const scale=Math.max(1,Math.min(c.width,c.height)/700),rad=9*scale;
+    (APP.viewer.corrections||[]).forEach((l,i)=>{
+      const x=l.x*c.width,y=l.y*c.height,col=TEACH_COLORS[l.cls]||'#fff';
+      ctx.save();ctx.lineWidth=3*scale;ctx.strokeStyle=col;ctx.fillStyle='rgba(255,255,255,.88)';
+      if(l.cls==='notfruit'){
+        ctx.beginPath();ctx.moveTo(x-rad,y-rad);ctx.lineTo(x+rad,y+rad);ctx.moveTo(x+rad,y-rad);ctx.lineTo(x-rad,y+rad);ctx.stroke();
+      }else{
+        ctx.beginPath();ctx.arc(x,y,rad,0,Math.PI*2);ctx.fill();ctx.stroke();
+        ctx.fillStyle=col;ctx.font=`bold ${10*scale}px sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';
+        const letter={green:'G',yellow:'Y',brown:'B',dry:'D',unknown:'?'}[l.cls]||'?';ctx.fillText(letter,x,y);
+        if(l.partial){ctx.setLineDash([4*scale,3*scale]);ctx.beginPath();ctx.arc(x,y,rad*1.55,0,Math.PI*2);ctx.stroke();}
+      }
+      ctx.restore();
+    });
+    $('viewerImg').src=c.toDataURL('image/jpeg',.92);
+  };base.src=APP.viewer.rawSrc;
+}
+function updateTeachStatus(){
+  const ls=APP.viewer.corrections||[],counts={green:0,yellow:0,brown:0,dry:0,unknown:0,notfruit:0},partial=ls.filter(x=>x.partial).length;
+  ls.forEach(x=>counts[x.cls]=(counts[x.cls]||0)+1);
+  const s=$('teachStatus');if(s)s.innerHTML=`Labels: G <b>${counts.green}</b> · Y <b>${counts.yellow}</b> · B <b>${counts.brown}</b> · Dry <b>${counts.dry}</b> · ? <b>${counts.unknown}</b> · Not-fruit <b>${counts.notfruit}</b> · partial <b>${partial}</b>. ${$('teachComplete')?.checked?'<b>FULL correction will override automatic result.</b>':'Partial teaching only — automatic result will not be overwritten.'}`;
+}
+function sampleTeachColor(img,xNorm,yNorm,cls,partial){
+  if(partial||!['green','yellow','brown','notfruit'].includes(cls))return;
+  try{
+    const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0);
+    const x=xNorm*c.width,y=yNorm*c.height,r=Math.max(2,Math.round(Math.min(c.width,c.height)*.004));
+    const x0=Math.max(0,Math.round(x-r)),y0=Math.max(0,Math.round(y-r)),w=Math.min(c.width-x0,r*2+1),h=Math.min(c.height-y0,r*2+1),d=ctx.getImageData(x0,y0,w,h).data;
+    let rs=0,gs=0,bs=0,n=0;for(let i=0;i<d.length;i+=4){rs+=d[i];gs+=d[i+1];bs+=d[i+2];n++;}
+    const hsv=rgbToHsv(rs/n,gs/n,bs/n),target=cls==='notfruit'?'ignore':cls;APP.calibration[target].push(hsv);if(APP.calibration[target].length>80)APP.calibration[target].shift();
+  }catch(e){}
+}
+function manualFrameMetrics(labels,oldFrame){
+  const c={green:0,yellow:0,brown:0,dry:0,unknown:0};labels.forEach(l=>{if(c[l.cls]!==undefined)c[l.cls]++;});
+  const valid=c.green+c.yellow+c.brown,totalDetected=valid+c.dry+c.unknown,pct={green:0,yellow:0,orange:0,brown:0,dry:0,unknown:0};
+  if(valid){pct.green=100*c.green/valid;pct.yellow=100*c.yellow/valid;pct.brown=100*c.brown/valid;}
+  pct.dry=totalDetected?100*c.dry/totalDetected:0;pct.unknown=(valid+c.unknown)?100*c.unknown/(valid+c.unknown):0;
+  return {pct,fruitEq:{...c,totalValid:valid,totalDetected,typicalShort:oldFrame?.fruitEq?.typicalShort||0,typicalArea:oldFrame?.fruitEq?.typicalArea||0},confidence:Math.max(0,1-pct.unknown/100),analysisValid:valid>0,invalidReason:valid>0?'':'Fully corrected frame contains no valid fruit labels.'};
+}
+function rerenderAllResults(){
+  $('resultsList').innerHTML='';for(const t of Object.values(APP.results))for(const r of Object.values(t.sides||{}))if(r?.frames)renderFileResult(r);
+  combineTreeSides();computeTreeRankings();updateSessionSummary();renderMap1();renderRoute();saveLocal();
+}
+$('teachHereBtn').onclick=()=>{
+  if(APP.viewer.calibrating){toast('Turn calibration off first');return;}
+  APP.viewer.teaching=!APP.viewer.teaching;$('teachPanel').classList.toggle('on',APP.viewer.teaching);$('viewerBody').classList.toggle('teaching',APP.viewer.teaching);
+  $('teachHereBtn').textContent=APP.viewer.teaching?'Teaching ON':'Correct / Teach';resetViewerTransform();if(APP.viewer.teaching)renderTeachImage();else $('viewerImg').src=APP.viewer.src;updateTeachStatus();
+};
+document.querySelectorAll('.teachClass').forEach(b=>b.onclick=()=>{APP.viewer.teachClass=b.dataset.teach;document.querySelectorAll('.teachClass').forEach(x=>x.classList.toggle('on',x===b));});
+$('teachPartial').onchange=()=>{APP.viewer.teachPartial=$('teachPartial').checked;};
+$('teachComplete').onchange=()=>{APP.viewer.teachComplete=$('teachComplete').checked;updateTeachStatus();};
+$('teachCondition').onchange=()=>{APP.viewer.teachCondition=$('teachCondition').value;};
+$('teachUndoBtn').onclick=()=>{APP.viewer.corrections.pop();renderTeachImage();updateTeachStatus();};
+$('teachClearBtn').onclick=()=>{if(confirm('Clear all labels from this frame?')){APP.viewer.corrections=[];renderTeachImage();updateTeachStatus();}};
+$('teachSaveBtn').onclick=async()=>{
+  if(!APP.viewer.rawSrc){toast('No frame available');return;}if(!APP.viewer.corrections.length){toast('Add at least one correction');return;}
+  const fr=APP.viewer.frameRef,rec=APP.viewer.recRef,title=$('viewerTitle').textContent;
+  const ex={id:(fr?.trainingId||('ex_'+Date.now()+'_'+Math.random().toString(36).slice(2))),title,createdAt:new Date().toISOString(),condition:APP.viewer.teachCondition,fullyCorrected:!!$('teachComplete').checked,imageData:APP.viewer.rawSrc,labels:APP.viewer.corrections.map(x=>({...x})),auto:{pct:fr?.pct||null,fruitEq:fr?.fruitEq||null,roi:fr?.roi||null}};
+  try{await dbPutTraining(ex);try{await navigator.storage?.persist?.();}catch(e){}if(fr){fr.trainingId=ex.id;fr.manualCorrections=ex.labels;fr.teachCondition=ex.condition;}
+    // Corrections immediately teach the colour references; a fully corrected frame also becomes ground truth in the current analysis/ranking.
+    if(fr && ex.fullyCorrected){const m=manualFrameMetrics(ex.labels,fr);Object.assign(fr,m,{manualTruth:true});fr.overlayUrl=APP.viewer.src;}
+    if(rec&&fr&&ex.fullyCorrected){const a=aggregateFrames(rec.frames);Object.assign(rec,a);}
+    saveLocal();renderCalSummary();await refreshTrainingSummary();toast(ex.fullyCorrected?'Saved — manual truth applied':'Teaching example saved');
+    if(ex.fullyCorrected){$('viewerModal').classList.remove('on');rerenderAllResults();}
+  }catch(e){toast('Could not save teaching example');}
+};
+const vb=$('viewerBody');
+vb.addEventListener('pointerdown',e=>{
+  if(APP.viewer.calibrating)return;
+  vb.setPointerCapture?.(e.pointerId);APP.viewer.pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(APP.viewer.pointers.size===1&&!APP.viewer.teaching)APP.viewer.lastPan={x:e.clientX,y:e.clientY};
+  if(APP.viewer.pointers.size===2){const pts=[...APP.viewer.pointers.values()];APP.viewer.pinchDist=Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y);APP.viewer.pinchZoom=APP.viewer.zoom;APP.viewer.lastPan=null;}
+});
+vb.addEventListener('pointermove',e=>{
+  if(APP.viewer.calibrating||!APP.viewer.pointers.has(e.pointerId))return;e.preventDefault();
+  APP.viewer.pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(APP.viewer.pointers.size>=2){
+    const pts=[...APP.viewer.pointers.values()].slice(0,2),dist=Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y);
+    if(APP.viewer.pinchDist>0)setViewerZoom(APP.viewer.pinchZoom*(dist/APP.viewer.pinchDist));
+  }else if(!APP.viewer.teaching&&APP.viewer.zoom>1&&APP.viewer.lastPan){
+    APP.viewer.panX+=e.clientX-APP.viewer.lastPan.x;APP.viewer.panY+=e.clientY-APP.viewer.lastPan.y;APP.viewer.lastPan={x:e.clientX,y:e.clientY};applyViewerTransform();
+  }
+});
+function viewerPointerEnd(e){
+  APP.viewer.pointers.delete(e.pointerId);
+  if(APP.viewer.pointers.size===1){const p=[...APP.viewer.pointers.values()][0];APP.viewer.lastPan={x:p.x,y:p.y};}
+  else if(APP.viewer.pointers.size===0){APP.viewer.lastPan=null;APP.viewer.pinchDist=0;}
+}
+vb.addEventListener('pointerup',viewerPointerEnd);vb.addEventListener('pointercancel',viewerPointerEnd);
+vb.addEventListener('wheel',e=>{if(APP.viewer.calibrating)return;e.preventDefault();setViewerZoom(APP.viewer.zoom*(e.deltaY<0?1.15:.87));},{passive:false});
+$('viewerImg').addEventListener('click',e=>{
+  const img=e.currentTarget;
+  const rect=img.getBoundingClientRect();
+  if(APP.viewer.teaching){
+    const xn=Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width)),yn=Math.max(0,Math.min(1,(e.clientY-rect.top)/rect.height));
+    const cls=APP.viewer.teachClass||'yellow',partial=!!$('teachPartial').checked;APP.viewer.corrections.push({x:xn,y:yn,cls,partial});
+    // Sample from the raw image, not from the marker-rendered image.
+    const raw=new Image();raw.onload=()=>{sampleTeachColor(raw,xn,yn,cls,partial);saveLocal();renderCalSummary();};raw.src=APP.viewer.rawSrc;
+    renderTeachImage();updateTeachStatus();return;
+  }
+  if(!APP.viewer.calibrating)return;
+  const x=(e.clientX-rect.left)/rect.width*img.naturalWidth;
+  const y=(e.clientY-rect.top)/rect.height*img.naturalHeight;
+  const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;
+  const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0);
+  const radius=Math.max(1,Math.round(Math.min(c.width,c.height)*.004));
+  const x0=Math.max(0,Math.floor(x-radius)),y0=Math.max(0,Math.floor(y-radius));
+  const w=Math.min(c.width-x0,radius*2+1),h=Math.min(c.height-y0,radius*2+1);
+  const d=ctx.getImageData(x0,y0,w,h).data;
+  let rs=0,gs=0,bs=0,n=0;
+  for(let i=0;i<d.length;i+=4){rs+=d[i];gs+=d[i+1];bs+=d[i+2];n++}
+  const hsv=rgbToHsv(rs/n,gs/n,bs/n);
+  APP.calibration[APP.calibrationClass].push(hsv);
+  if(APP.calibration[APP.calibrationClass].length>40)APP.calibration[APP.calibrationClass].shift();
+  saveLocal();renderCalSummary();
+  toast(`${APP.calibrationClass} sample added`);
+});
+
+function heatColor(p){
+  p=Math.max(0,Math.min(100,p||0));
+  const stops=[[0,[220,239,220]],[45,[244,223,115]],[72,[239,154,72]],[100,[217,91,63]]];
+  for(let i=0;i<stops.length-1;i++){
+    const a=stops[i],b=stops[i+1];if(p>=a[0]&&p<=b[0]){
+      const t=(p-a[0])/(b[0]-a[0]);const c=a[1].map((v,j)=>Math.round(v+(b[1][j]-v)*t));return `rgb(${c.join(',')})`;
+    }
+  }return 'rgb(217,91,63)';
+}
+function openTreeDetails(key){
+  const t=getTreeResult(key);if(!t)return;
+  const p=t.avg.pct;
+  $('treeModalTitle').textContent=`Tree ${key}`;
+  $('treeModalBody').innerHTML=`
+    <div class="detailHero">
+      <div><b style="font-size:14px">Relative plantation urgency</b><div class="sub">Rank #${t.rank} of ${t.
