@@ -1,0 +1,247 @@
+'brownDom','brownDomVal',1);
+$('framesPerVideo').onchange=()=>{APP.settings.framesPerVideo=parseInt($('framesPerVideo').value);saveLocal()};
+$('strictBrownToggle').onclick=()=>{
+  APP.settings.strictBrown=!APP.settings.strictBrown;
+  $('strictBrownToggle').classList.toggle('on',APP.settings.strictBrown); saveLocal();
+};
+$('autoRoiToggle').onclick=()=>{
+  APP.settings.autoROI=!APP.settings.autoROI;
+  $('autoRoiToggle').classList.toggle('on',APP.settings.autoROI); saveLocal();
+};
+$('resetVisionBtn').onclick=()=>{
+  APP.settings={crop:.85,shadowCut:.18,satCut:.16,brownBright:.56,brownDom:14,framesPerVideo:3,strictBrown:true,rankMode:'auto',brownPresenceMin:1.5,autoROI:true};
+  applySettingsUI(); saveLocal(); toast('Vision defaults restored');
+};
+
+document.querySelectorAll('.calClass').forEach(b=>b.addEventListener('click',()=>{
+  if(!b.dataset.class)return;
+  APP.calibrationClass=b.dataset.class;
+  document.querySelectorAll('.calClass[data-class]').forEach(x=>x.classList.toggle('on',x===b));
+}));
+$('clearCalibrationBtn').onclick=()=>{
+  APP.calibration={green:[],yellow:[],orange:[],brown:[],ignore:[]};
+  saveLocal(); renderCalSummary(); toast('Calibration cleared');
+};
+function renderCalSummary(){
+  const c=APP.calibration;
+  $('calSummary').innerHTML=`Samples stored locally — Green <b>${c.green.length}</b> · Yellow/Khalal <b>${c.yellow.length+(c.orange?.length||0)}</b> · Brown <b>${c.brown.length}</b> · Ignore <b>${c.ignore.length}</b>`;
+}
+function applySettingsUI(){
+  $('shadowCut').value=Math.round(APP.settings.shadowCut*100); $('shadowVal').textContent=$('shadowCut').value;
+  $('satCut').value=Math.round(APP.settings.satCut*100); $('satVal').textContent=$('satCut').value;
+  $('brownBright').value=Math.round(APP.settings.brownBright*100); $('brownBrightVal').textContent=$('brownBright').value;
+  $('brownDom').value=APP.settings.brownDom; $('brownDomVal').textContent=$('brownDom').value;
+  $('framesPerVideo').value=APP.settings.framesPerVideo;
+  $('strictBrownToggle').classList.toggle('on',APP.settings.strictBrown);
+  $('autoRoiToggle').classList.toggle('on',APP.settings.autoROI!==false);
+  document.querySelectorAll('#cropSeg .seg').forEach(x=>x.classList.toggle('on',Math.abs(parseFloat(x.dataset.crop)-APP.settings.crop)<.001));
+  document.querySelectorAll('#rankModeSeg .seg').forEach(x=>x.classList.toggle('on',x.dataset.rankmode===APP.settings.rankMode));
+}
+
+function updatePlantationPill(){
+  const total=APP.rows.reduce((s,r)=>s+r.count,0);
+  $('plantationPill').textContent=total?`${APP.rows.length} rows · ${total} trees · ${total*2} sides`:'No plantation saved';
+}
+
+// GALLERY MULTISELECT RESTORE (v2.6.12)
+// IMPORTANT: keep the actual image input over the visible Gallery control.
+// Do NOT route this through showOpenFilePicker(): that Android path opens Files/Drive
+// and removes Gallery access. The native HTML image picker is deliberately used here.
+function showPickerDiagnostic(message, fatal=false){
+  const box=$('pickerDiagnostic');
+  if(!box) return;
+  box.style.display='block';
+  box.style.borderColor=fatal?'#e29393':'#d6c79a';
+  box.style.background=fatal?'#fff1f1':'#fff9e8';
+  box.style.color=fatal?'#8b1e1e':'#6e5710';
+  box.innerHTML=message;
+}
+function clearPickerDiagnostic(){
+  const box=$('pickerDiagnostic'); if(box){box.style.display='none';box.textContent='';}
+}
+function isSupportedImageFile(f){
+  if(!f) return false;
+  if((f.type||'').toLowerCase().startsWith('image/')) return true;
+  return /\.(jpe?g|png|webp|gif|bmp|heic|heif)$/i.test(f.name||'');
+}
+function queuePickedFiles(files, source){
+  const arr=Array.from(files||[]).filter(isSupportedImageFile);
+  if(!arr.length) return 0;
+  const incoming=arr.map(f=>({
+    file:f,name:f.name,type:'image',timestamp:f.lastModified||0,tree:null,side:null,status:'pending',source:source||'picker',relativePath:f.webkitRelativePath||f.relativePath||''
+  }));
+  APP.files=[...APP.files,...incoming].sort((a,b)=>a.timestamp-b.timestamp);
+  assignSlots(); renderFileList();
+  showPickerDiagnostic(`<b>${escapeHtml(source||'Import')}:</b> ${arr.length} photo${arr.length===1?'':'s'} received and queued.`,false);
+  return arr.length;
+}
+
+// Direct picker remains only as a fallback. Gallery Share is the reliable PWA path.
+$('mediaInput').onchange=e=>{
+  const raw=Array.from(e.target.files||[]);
+  const n=queuePickedFiles(raw,'Direct picker');
+  if(n===1 && e.target.multiple){
+    showPickerDiagnostic('<b>Chrome returned one photo.</b> Use Gallery → select all required photos → Share → Date Cluster Inspector.',true);
+  }
+  e.target.value='';
+};
+$('clearFilesBtn').onclick=()=>{APP.files=[];renderFileList();clearPickerDiagnostic()};
+
+$('runBtn').onclick=async()=>{
+  if(!APP.files.length)return;
+  $('progressCard').style.display='block';
+  $('sessionSummaryCard').style.display='none';
+  $('resultsList').innerHTML='';
+  APP.results={};
+  for(let i=0;i<APP.files.length;i++){
+    const f=APP.files[i];
+    $('progressFill').style.width=Math.round(i/APP.files.length*100)+'%';
+    $('progressText').textContent=`${i+1} / ${APP.files.length} — ${f.name}`;
+    const stat=$('fstat-'+i); if(stat){stat.textContent='working';stat.className='tag'}
+    try{
+      const frames=f.type==='video'?await videoFileToFrames(f.file):await imageFileToFrame(f.file);
+      const frameResults=frames.map((fr,idx)=>{
+        const a=analyzeCanvas(fr.canvas);
+        return {...a,raw:fr.raw,time:fr.time,frameNo:idx+1,sharpness:fr.sharpness};
+      });
+      const agg=aggregateFrames(frameResults);
+      const rec={name:f.name,tree:f.tree,side:f.side,frames:frameResults,...agg};
+      if(f.tree){
+        if(!APP.results[f.tree])APP.results[f.tree]={tree:f.tree,sides:{},avg:null};
+        APP.results[f.tree].sides[f.side||'X']=rec;
+      }else{
+        APP.results['extra_'+i]={tree:null,sides:{X:rec},avg:rec};
+      }
+      f.status='done'; if(stat){stat.textContent='done';stat.className='tag done'}
+      renderFileResult(rec);
+    }catch(err){
+      f.status='error'; if(stat){stat.textContent='error';stat.className='tag err'}
+      renderErrorResult(f,err);
+    }
+    await new Promise(r=>setTimeout(r,30));
+  }
+  combineTreeSides();
+  computeTreeRankings();
+  saveLocal();
+  $('progressFill').style.width='100%';
+  $('progressText').textContent='Complete — everything was analyzed locally.';
+  updateSessionSummary();
+  $('sessionSummaryCard').style.display='block';
+  renderFileList();
+};
+
+function aggregateFrames(frames){
+  const usable=frames.filter(f=>f.analysisValid!==false);
+  if(!usable.length)return {pct:{green:0,yellow:0,orange:0,brown:0,dry:0,unknown:100},fruitEq:{green:0,yellow:0,brown:0,dry:0,unknown:0,totalValid:0,totalDetected:0,typicalShort:0,typicalArea:0},roiCoverage:0,confidence:0,analysisValid:false,invalidReason:'No reliable cluster ROI in this file.'};
+  frames=usable;
+  const keys=['green','yellow','orange','brown','dry'];
+  const weights=frames.map(f=>Math.max(.05,f.confidence));
+  const sw=weights.reduce((a,b)=>a+b,0);
+  const pct={};
+  keys.forEach(k=>pct[k]=frames.reduce((s,f,i)=>s+f.pct[k]*weights[i],0)/sw);
+  pct.unknown=frames.reduce((s,f,i)=>s+f.pct.unknown*weights[i],0)/sw;
+  const fruitEq={};
+  for(const k of ['green','yellow','brown','dry','unknown','totalValid','totalDetected','typicalShort','typicalArea'])fruitEq[k]=frames.reduce((s,f,i)=>s+((f.fruitEq?.[k]||0)*weights[i]),0)/sw;
+  const roiCoverage=frames.reduce((s,f,i)=>s+((f.roi?.coverage||0)*weights[i]),0)/sw;
+  return {pct,fruitEq,roiCoverage,confidence:frames.reduce((s,f,i)=>s+f.confidence*weights[i],0)/sw,analysisValid:true};
+}
+function combineTreeSides(){
+  Object.values(APP.results).forEach(t=>{
+    const sides=Object.values(t.sides||{}).filter(r=>r.analysisValid!==false);
+    if(!sides.length){t.avg=null;return;}
+    const keys=['green','yellow','orange','brown','dry','unknown'];
+    const avg={pct:{},confidence:sides.reduce((s,r)=>s+r.confidence,0)/sides.length,fruitEq:{}};
+    keys.forEach(k=>avg.pct[k]=sides.reduce((s,r)=>s+r.pct[k],0)/sides.length);
+    for(const k of ['green','yellow','brown','dry','unknown','totalValid','totalDetected','typicalShort','typicalArea'])avg.fruitEq[k]=sides.reduce((s,r)=>s+(r.fruitEq?.[k]||0),0)/sides.length;
+    avg.ripenessScore=avg.pct.brown;
+    t.avg=avg;
+  });
+}
+function renderFileResult(rec){
+  const box=document.createElement('div');box.className='result';
+  const id='res-'+Math.random().toString(36).slice(2);
+  const invalid=rec.analysisValid===false;
+  box.innerHTML=`<div class="resultHead"><strong>${escapeHtml(rec.tree?`${rec.tree}-${rec.side} · ${rec.name}`:rec.name)}</strong><span class="tag ${invalid?'err':'done'}">${invalid?'INVALID ROI — NOT RANKED':`Brown ${rec.pct.brown.toFixed(1)}% · Dry reject ${rec.pct.dry.toFixed(1)}%`}</span></div><div class="resultBody" id="${id}">
+    ${invalid?`<div class="note err"><b>Result suppressed.</b> ${escapeHtml(rec.invalidReason||'Cluster localization failed.')} This frame is excluded from tree averages and plantation ranking.</div>`:''}
+    <div class="stats" style="${invalid?'opacity:.35':''}">
+      ${statHtml('green',rec.pct.green)}${statHtml('yellow',rec.pct.yellow,'Yellow / Khalal')}${statHtml('brown',rec.pct.brown)}${statHtml('dry',rec.pct.dry,'Dry reject')}${statHtml('gray',rec.pct.unknown,'Unknown')}
+    </div>
+    <p class="sub" style="margin-top:8px">Confidence ${(rec.confidence*100).toFixed(0)}%. Percentages use estimated <b>fruit-equivalent counts</b>; background/leaves/stems are ignored rather than counted as Unknown. Estimated fruit counts: Green ≈ <b>${rec.fruitEq?.green?.toFixed(1)||'0'}</b> · Yellow/Khalal ≈ <b>${rec.fruitEq?.yellow?.toFixed(1)||'0'}</b> · Brown ≈ <b>${rec.fruitEq?.brown?.toFixed(1)||'0'}</b> · Dry reject ≈ <b>${rec.fruitEq?.dry?.toFixed(1)||'0'}</b> · unresolved ≈ <b>${rec.fruitEq?.unknown?.toFixed(1)||'0'}</b>. Total valid ≈ ${rec.fruitEq?.totalValid?.toFixed(1)||'0'} · typical fruit short side ${rec.fruitEq?.typicalShort?.toFixed(1)||'—'} px. Auto cluster ROI uses about ${((rec.roiCoverage||0)*100).toFixed(0)}% of the analysis crop.${rec.pct.unknown>5?' ⚠ Fruit-level Unknown exceeds 5%; do not trust small ranking differences in this frame.':''}</p>
+    <div class="framegrid" style="margin-top:10px"></div>
+  </div>`;
+  box.querySelector('.resultHead').onclick=()=>box.querySelector('.resultBody').classList.toggle('on');
+  const fg=box.querySelector('.framegrid');
+  rec.frames.forEach(fr=>{
+    const c=document.createElement('div');c.className='framecard';
+    c.innerHTML=`<img src="${fr.overlayUrl}" alt="classified frame"><div class="framecap">${fr.analysisValid===false?'<b style="color:#b33">INVALID — AUTO ROI FAILED · NOT USED</b><br>':''}Frame ${fr.frameNo}${fr.time?` · ${fr.time.toFixed(1)}s`:''} · confidence ${(fr.confidence*100).toFixed(0)}% · counts G ${(fr.fruitEq?.green||0).toFixed(1)} / Y ${(fr.fruitEq?.yellow||0).toFixed(1)} / B ${(fr.fruitEq?.brown||0).toFixed(1)} / D ${(fr.fruitEq?.dry||0).toFixed(1)} · ROI ${((fr.roi?.coverage||0)*100).toFixed(0)}% · accepted-pixel density ${((fr.validDensity||0)*100).toFixed(0)}%
+      <div class="miniStats">
+        <span class="mini green">G ${fr.pct.green.toFixed(1)}%</span>
+        <span class="mini yellow">Y/K ${fr.pct.yellow.toFixed(1)}%</span>
+        <span class="mini brown">B ${fr.pct.brown.toFixed(1)}%</span>
+        <span class="mini dry">D ${fr.pct.dry.toFixed(1)}%</span>
+        <span class="mini gray">? ${fr.pct.unknown.toFixed(1)}%</span>
+      </div></div>`;
+    c.querySelector('img').onclick=()=>openViewer(fr.overlayUrl,fr.raw,`${rec.tree||''}${rec.side?'-'+rec.side:''} · frame ${fr.frameNo}`,fr,rec);
+    fg.appendChild(c);
+  });
+  $('resultsList').prepend(box);
+}
+function statHtml(cls,val,label){
+  const name=label||cls[0].toUpperCase()+cls.slice(1);
+  return `<div class="stat"><div class="v ${cls}">${val.toFixed(1)}%</div><div class="k">${name}</div></div>`;
+}
+function renderErrorResult(f,err){
+  const d=document.createElement('div');d.className='note err';d.textContent=`${f.name}: ${err.message}`;$('resultsList').prepend(d);
+}
+function updateSessionSummary(){
+  const avgs=Object.values(APP.results).map(t=>t.avg).filter(Boolean);
+  if(!avgs.length)return;
+  for(const k of ['green','yellow','brown','dry','unknown']){
+    const v=avgs.reduce((s,a)=>s+(a.pct[k]||0),0)/avgs.length;
+    const el=$('sum'+k[0].toUpperCase()+k.slice(1)); if(el) el.textContent=v.toFixed(1)+'%';
+  }
+}
+
+function rankingMetrics(t){
+  const p=t?.avg?.pct||{green:0,yellow:0,orange:0,brown:0,unknown:100};
+  const gyDen=p.green+p.yellow;
+  const ybDen=p.yellow+p.brown;
+  const yellowProgress=gyDen>0?100*p.yellow/gyDen:0;
+  const brownProgress=ybDen>0?100*p.brown/ybDen:0;
+  const brownPresent=p.brown>=(APP.settings.brownPresenceMin||1.5);
+  let raw=0,basis='';
+  const mode=APP.settings.rankMode||'auto';
+  if(mode==='brown'){
+    raw=brownProgress;basis='Brown stage: more brown = more urgent';
+  }else if(mode==='yellow'){
+    if(brownPresent){
+      const yellowFrac=ybDen>0?100*p.yellow/ybDen:100;
+      raw=100-yellowFrac;basis='Yellow + brown: more yellow = less urgent';
+    }else{
+      raw=yellowProgress;basis='Green + yellow: more yellow = more urgent';
+    }
+  }else{
+    if(brownPresent){raw=brownProgress;basis='Auto → yellow-to-brown stage';}
+    else{raw=yellowProgress;basis='Auto → green-to-yellow stage';}
+  }
+  return {rawUrgency:Math.max(0,Math.min(100,raw)),basis,yellowProgress,brownProgress,brownPresent};
+}
+function computeTreeRankings(){
+  combineTreeSides();
+  const trees=Object.values(APP.results).filter(t=>t.tree&&t.avg&&t.avg.pct);
+  trees.forEach(t=>Object.assign(t,rankingMetrics(t)));
+  trees.sort((a,b)=>b.rawUrgency-a.rawUrgency || (b.avg.confidence||0)-(a.avg.confidence||0) || String(a.tree).localeCompare(String(b.tree),undefined,{numeric:true}));
+  const N=trees.length;
+  const avgRaw=N?trees.reduce((s,t)=>s+t.rawUrgency,0)/N:0;
+  const avgYellow=N?trees.reduce((s,t)=>s+(t.avg.pct.yellow||0),0)/N:0;
+  const avgBrown=N?trees.reduce((s,t)=>s+(t.avg.pct.brown||0),0)/N:0;
+  trees.forEach((t,i)=>{
+    t.rank=i+1;
+    // Relative plantation percentage: top tree = 100%; with 20 trees the last = 5%.
+    const below=trees.filter(x=>x.rawUrgency<t.rawUrgency-1e-9).length;
+    t.relativePct=Math.round(100*(below+1)/Math.max(1,N));
+    t.dayBucket=Math.floor(i/Math.max(1,APP.treesPerDay))+1;
+    t.plantationAvgRaw=avgRaw;t.plantationAvgYellow=avgYellow;t.plantationAvgBrown=avgBrown;t.totalAnalyzed=N;
+  });
+}
+function getTreeResult(key){return APP.results[key]&&APP.results[key].avg?APP.results[
