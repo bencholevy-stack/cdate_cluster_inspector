@@ -1,0 +1,8 @@
+{
+  "app": "Date Cluster Inspector",
+  "version": "2.7.0",
+  "base": "v2.6.12",
+  "import": "PWA Web Share Target",
+  "offline": true,
+  "api_calls": false
+}
