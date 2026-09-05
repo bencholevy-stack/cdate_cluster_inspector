@@ -1,4 +1,4 @@
-const CACHE_NAME='dci-pwa-2.7.6';
+const CACHE_NAME='dci-pwa-2.7.7';
 const APP_SHELL=['./','./index.html','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png'];
 
 self.addEventListener('install',event=>{
