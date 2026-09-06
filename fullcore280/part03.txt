@@ -1,0 +1,318 @@
+e="margin-top:10px"></p>
+  </div>
+</section>
+</main>
+
+<div class="modal" id="treeModal">
+  <div class="viewer" style="max-width:560px">
+    <div class="viewerTop">
+      <strong id="treeModalTitle">Tree</strong>
+      <button class="btn secondary" id="closeTreeModalBtn">Close</button>
+    </div>
+    <div style="padding:15px" id="treeModalBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="viewerModal">
+  <div class="viewer">
+    <div class="viewerTop">
+      <strong id="viewerTitle">Debug frame</strong>
+      <div class="btnrow">
+        <button class="btn secondary zoomBtn" id="zoomOutBtn">−</button>
+        <span class="zoomRead" id="zoomRead">100%</span>
+        <button class="btn secondary zoomBtn" id="zoomInBtn">+</button>
+        <button class="btn secondary" id="zoomResetBtn">Reset</button>
+        <button class="btn secondary" id="calibrateHereBtn">Calibrate color</button>
+        <button class="btn primary" id="teachHereBtn">Correct / Teach</button>
+        <button class="btn secondary" id="closeViewerBtn">Close</button>
+      </div>
+    </div>
+    <div class="viewerLegend">
+      <span class="lg" style="color:#26aa5c"><span class="sw"></span>Green fruit counted</span>
+      <span class="lg" style="color:#e1b400"><span class="sw"></span>Yellow/Khalal counted</span>
+      <span class="lg" style="color:#8a5833"><span class="sw"></span>Brown fruit counted</span>
+      <span class="lg" style="color:#78668f"><span class="sw"></span>Dry/failed fruit rejected</span>
+      <span class="lg" style="color:#118da8"><span class="sw"></span>Cyan dashed box = cluster ROI analyzed</span>
+      <span class="lg" style="color:#8b9790">Unmarked = ignored / not accepted as fruit</span>
+    </div>
+    <div class="teachPanel" id="teachPanel">
+      <div class="teachClasses">
+        <button class="teachClass" data-teach="green">🟢 Green</button>
+        <button class="teachClass on" data-teach="yellow">🟡 Yellow/Khalal</button>
+        <button class="teachClass" data-teach="brown">🟤 Brown</button>
+        <button class="teachClass" data-teach="dry">🟣 Dry/garbage</button>
+        <button class="teachClass" data-teach="unknown">⚪ Uncertain fruit</button>
+        <button class="teachClass" data-teach="notfruit">✕ Not fruit</button>
+      </div>
+      <div class="teachControls">
+        <div>
+          <label>Image condition</label>
+          <select id="teachCondition">
+            <option value="normal">Normal / no net</option>
+            <option value="black_net">Black net</option>
+            <option value="backlit">Strong backlight</option>
+            <option value="shade">Heavy shade</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div>
+          <label class="checkline"><input type="checkbox" id="teachPartial"> Partial / occluded fruit = still 1 fruit</label>
+          <label class="checkline"><input type="checkbox" id="teachComplete"> Frame fully corrected — use my labels as truth</label>
+        </div>
+      </div>
+      <div class="btnrow">
+        <button class="btn secondary" id="teachUndoBtn">↩ Undo last</button>
+        <button class="btn secondary" id="teachClearBtn">Clear labels</button>
+        <button class="btn primary" id="teachSaveBtn">Save correction</button>
+      </div>
+      <div class="teachStatus" id="teachStatus">Tap the center of each fruit. A partial fruit is still one fruit. “Not fruit” teaches the app what to reject.</div>
+    </div>
+    <div class="viewerBody" id="viewerBody"><div class="viewerStage" id="viewerStage"><img id="viewerImg" alt="debug frame"></div></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+
+const APP = {
+  lang:'en',
+  rows:[],
+  treesPerDay:10,
+  files:[],
+  results:{},
+  treeStatus:{},
+  selectedDay:1,
+  editRoute:false,
+  settings:{
+    crop:.85,
+    shadowCut:.18,
+    satCut:.16,
+    brownBright:.56,
+    brownDom:14,
+    framesPerVideo:3,
+    strictBrown:true,
+    rankMode:'auto',
+    brownPresenceMin:1.5,
+    autoROI:true
+  },
+  calibration:{green:[],yellow:[],orange:[],brown:[],ignore:[]},
+  calibrationClass:'yellow',
+  trainingSummary:{frames:0,fruits:0,partial:0,net:0},
+  viewer:{src:null,rawSrc:null,calibrating:false,teaching:false,teachClass:'yellow',teachPartial:false,teachComplete:false,teachCondition:'normal',corrections:[],frameRef:null,recRef:null,zoom:1,panX:0,panY:0,pointers:new Map(),pinchDist:0,pinchZoom:1,lastPan:null},
+  map1HitAreas:[],
+  currentTab:'setup'
+};
+
+const $=id=>document.getElementById(id);
+function toast(msg){
+  const el=$('toast'); el.textContent=msg; el.classList.add('on');
+  clearTimeout(toast._t); toast._t=setTimeout(()=>el.classList.remove('on'),1800);
+}
+function compactResultsForStorage(){
+  const out={};
+  for(const [key,t] of Object.entries(APP.results)){
+    const sides={};
+    for(const [side,r] of Object.entries(t.sides||{})){
+      sides[side]={
+        name:r.name||'',tree:r.tree||t.tree||null,side:r.side||side,
+        pct:r.pct||null,confidence:r.confidence||0
+      };
+    }
+    out[key]={tree:t.tree||null,sides,avg:t.avg||null,rank:t.rank||null,dayBucket:t.dayBucket||null};
+  }
+  return out;
+}
+function saveLocal(){
+  try{
+    localStorage.setItem('dci.local.config',JSON.stringify({
+      rows:APP.rows,treesPerDay:APP.treesPerDay,settings:APP.settings,
+      treeStatus:APP.treeStatus,calibration:APP.calibration
+    }));
+    localStorage.setItem('dci.local.results',JSON.stringify(compactResultsForStorage()));
+  }catch(e){}
+}
+function loadLocal(){
+  try{
+    const c=JSON.parse(localStorage.getItem('dci.local.config')||'null');
+    if(c){
+      APP.rows=c.rows||[];
+      APP.treesPerDay=c.treesPerDay||10;
+      APP.settings={...APP.settings,...(c.settings||{})};
+      APP.treeStatus=c.treeStatus||{};
+      APP.calibration={...APP.calibration,...(c.calibration||{})};
+    }
+    APP.results=JSON.parse(localStorage.getItem('dci.local.results')||'{}')||{};
+  }catch(e){}
+}
+
+
+const TRAIN_DB='dci_training_v1',TRAIN_STORE='examples';
+function openTrainingDB(){
+  return new Promise((resolve,reject)=>{
+    if(!('indexedDB' in window)){reject(new Error('IndexedDB unavailable'));return;}
+    const req=indexedDB.open(TRAIN_DB,1);
+    req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains(TRAIN_STORE))db.createObjectStore(TRAIN_STORE,{keyPath:'id'});};
+    req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error||new Error('Training database error'));
+  });
+}
+async function dbAllTraining(){
+  const db=await openTrainingDB();return new Promise((resolve,reject)=>{const tx=db.transaction(TRAIN_STORE,'readonly'),req=tx.objectStore(TRAIN_STORE).getAll();req.onsuccess=()=>resolve(req.result||[]);req.onerror=()=>reject(req.error);});
+}
+async function dbPutTraining(ex){
+  const db=await openTrainingDB();return new Promise((resolve,reject)=>{const tx=db.transaction(TRAIN_STORE,'readwrite');tx.objectStore(TRAIN_STORE).put(ex);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});
+}
+async function dbClearTraining(){
+  const db=await openTrainingDB();return new Promise((resolve,reject)=>{const tx=db.transaction(TRAIN_STORE,'readwrite');tx.objectStore(TRAIN_STORE).clear();tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});
+}
+async function refreshTrainingSummary(){
+  try{
+    const all=await dbAllTraining();let fruits=0,partial=0,net=0;
+    all.forEach(ex=>{if(ex.condition==='black_net')net++;(ex.labels||[]).forEach(l=>{if(l.cls!=='notfruit'){fruits++;if(l.partial)partial++;}});});
+    APP.trainingSummary={frames:all.length,fruits,partial,net};
+    $('dsFrames').textContent=all.length;$('dsFruits').textContent=fruits;$('dsPartial').textContent=partial;$('dsNet').textContent=net;
+  }catch(e){$('dsFrames').textContent='—';}
+}
+$('exportTrainingBtn').onclick=async()=>{
+  try{
+    const all=await dbAllTraining();if(!all.length){toast('No corrected frames yet');return;}
+    const pack={format:'Date Cluster Inspector training dataset',version:'2.6',createdAt:new Date().toISOString(),examples:all};
+    const blob=new Blob([JSON.stringify(pack)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=url;a.download='date_cluster_training_dataset.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1200);toast('Training dataset exported');
+  }catch(e){toast('Could not export training dataset');}
+};
+$('clearTrainingBtn').onclick=async()=>{if(!confirm('Delete all locally saved teaching examples?'))return;try{await dbClearTraining();await refreshTrainingSummary();toast('Training dataset cleared');}catch(e){toast('Could not clear dataset');}};
+
+const NAV={initialized:false,ignorePop:false};
+function activateTab(tab){
+  APP.currentTab=tab;
+  document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
+  const v=$('view-'+tab);if(v)v.classList.add('on');
+  if(tab==='map1') renderMap1();
+  if(tab==='route') renderRoute();
+  if(tab==='analyze') updatePlantationPill();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+function switchTab(tab,fromHistory=false){
+  if(!fromHistory && tab!==APP.currentTab){
+    try{history.pushState({dci:true,kind:'tab',tab},'',location.href)}catch(e){}
+  }
+  activateTab(tab);
+}
+document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>switchTab(b.dataset.tab)));
+function initBackGuard(){
+  if(NAV.initialized)return;NAV.initialized=true;
+  try{
+    history.replaceState({dci:true,kind:'base',tab:APP.currentTab},'',location.href);
+    history.pushState({dci:true,kind:'guard',tab:APP.currentTab},'',location.href);
+  }catch(e){}
+}
+window.addEventListener('popstate',function(e){
+  // Android Back closes an in-app overlay or returns to an earlier in-app tab.
+  // At the root, immediately recreate the guard entry instead of leaving the app.
+  if($('viewerModal').classList.contains('on')){$('viewerModal').classList.remove('on');return;}
+  if($('treeModal').classList.contains('on')){closeTreeDetails(true);return;}
+  const st=e.state||{};
+  if((st.kind==='tab'||st.kind==='guard')&&st.tab){activateTab(st.tab);return;}
+  if(st.kind==='base'){
+    activateTab(st.tab||'setup');
+    try{history.pushState({dci:true,kind:'guard',tab:APP.currentTab},'',location.href)}catch(err){}
+    toast('Back stays inside Date Cluster Inspector');
+    return;
+  }
+  try{history.pushState({dci:true,kind:'guard',tab:APP.currentTab},'',location.href)}catch(err){}
+});
+document.querySelectorAll('.lang').forEach(b=>b.addEventListener('click',()=>{
+  APP.lang=b.dataset.lang;
+  document.documentElement.lang=APP.lang;
+  document.documentElement.dir=(APP.lang==='he'||APP.lang==='ar')?'rtl':'ltr';
+  document.querySelectorAll('.lang').forEach(x=>x.classList.toggle('on',x===b));
+  toast('Language changed');
+}));
+
+function buildRowsTable(){
+  const n=Math.max(1,Math.min(26,parseInt($('nrows').value)||1));
+  const def=Math.max(1,parseInt($('defaultTrees').value)||20);
+  const old={}; APP.rows.forEach(r=>old[r.letter]=r.count);
+  $('rowsBox').innerHTML='';
+  for(let i=0;i<n;i++){
+    const l=String.fromCharCode(65+i);
+    const div=document.createElement('div'); div.className='rowline';
+    div.innerHTML=`<div class="rowletter">Row ${l}</div><input id="row-${l}" type="number" min="1" value="${old[l]||def}">`;
+    $('rowsBox').appendChild(div);
+  }
+}
+$('buildRowsBtn').onclick=buildRowsTable;
+$('saveSetupBtn').onclick=()=>{
+  const n=parseInt($('nrows').value)||0;
+  const rows=[];
+  for(let i=0;i<n;i++){
+    const l=String.fromCharCode(65+i), el=$('row-'+l), count=parseInt(el?.value)||0;
+    if(count<1){toast('Fill all tree counts');return}
+    rows.push({letter:l,count});
+  }
+  APP.rows=rows;
+  APP.treesPerDay=Math.max(1,parseInt($('treesPerDay').value)||10);
+  APP.rows.forEach(r=>{for(let i=1;i<=r.count;i++){const k=r.letter+i;if(!APP.treeStatus[k])APP.treeStatus[k]='unpicked'}});
+  saveLocal(); computeTreeRankings(); updatePlantationPill(); toast('Plantation saved');
+};
+$('resetPickingBtn').onclick=()=>{
+  if(!confirm('Reset all picking status?')) return;
+  APP.treeStatus={}; saveLocal(); renderMap1(); renderRoute(); toast('Picking status reset');
+};
+
+document.querySelectorAll('#rankModeSeg .seg').forEach(b=>b.onclick=()=>{
+  APP.settings.rankMode=b.dataset.rankmode;
+  document.querySelectorAll('#rankModeSeg .seg').forEach(x=>x.classList.toggle('on',x===b));
+  computeTreeRankings();renderMap1();renderRoute();saveLocal();
+});
+document.querySelectorAll('[data-mapmode]').forEach(b=>b.onclick=()=>{
+  APP.settings.rankMode=b.dataset.mapmode;
+  document.querySelectorAll('#rankModeSeg .seg').forEach(x=>x.classList.toggle('on',x.dataset.rankmode===APP.settings.rankMode));
+  computeTreeRankings();renderMap1();renderRoute();saveLocal();
+});
+
+document.querySelectorAll('#cropSeg .seg').forEach(b=>b.onclick=()=>{
+  APP.settings.crop=parseFloat(b.dataset.crop);
+  document.querySelectorAll('#cropSeg .seg').forEach(x=>x.classList.toggle('on',x===b));
+  saveLocal();
+});
+function bindRange(id,key,out,scale=100){
+  const el=$(id), o=$(out);
+  el.oninput=()=>{const n=parseFloat(el.value);APP.settings[key]=scale===1?n:n/scale;o.textContent=el.value;saveLocal()};
+}
+bindRange('shadowCut','shadowCut','shadowVal');
+bindRange('satCut','satCut','satVal');
+bindRange('brownBright','brownBright','brownBrightVal');
+bindRange('brownDom','brownDom','brownDomVal',1);
+$('framesPerVideo').onchange=()=>{APP.settings.framesPerVideo=parseInt($('framesPerVideo').value);saveLocal()};
+$('strictBrownToggle').onclick=()=>{
+  APP.settings.strictBrown=!APP.settings.strictBrown;
+  $('strictBrownToggle').classList.toggle('on',APP.settings.strictBrown); saveLocal();
+};
+$('autoRoiToggle').onclick=()=>{
+  APP.settings.autoROI=!APP.settings.autoROI;
+  $('autoRoiToggle').classList.toggle('on',APP.settings.autoROI); saveLocal();
+};
+$('resetVisionBtn').onclick=()=>{
+  APP.settings={crop:.85,shadowCut:.18,satCut:.16,brownBright:.56,brownDom:14,framesPerVideo:3,strictBrown:true,rankMode:'auto',brownPresenceMin:1.5,autoROI:true};
+  applySettingsUI(); saveLocal(); toast('Vision defaults restored');
+};
+
+document.querySelectorAll('.calClass').forEach(b=>b.addEventListener('click',()=>{
+  if(!b.dataset.class)return;
+  APP.calibrationClass=b.dataset.class;
+  document.querySelectorAll('.calClass[data-class]').forEach(x=>x.classList.toggle('on',x===b));
+}));
+$('clearCalibrationBtn').onclick=()=>{
+  APP.calibration={green:[],yellow:[],orange:[],brown:[],ignore:[]};
+  saveLocal(); renderCalSummary(); toast('Calibration cleared');
+};
+function renderCalSummary(){
+  const c=APP.calibration;
+  $('calSummary').innerHTML=`Samples stored locally — Green <b>${c.green.length}</b> · Yellow/Khalal <b>${c.yellow.length+(c.orange?.length||0)}</b> · Brown <b>${c.brown.length}</b> · Ignore <b>${c.ignore.length}</b>`;
+}
+function applySettingsUI(){
+  $('shadowCut').value=Math.round(APP.settings.shadowCut*100); $('shadowVal').textContent=$('shadowCut').value;
+  $('satCut
