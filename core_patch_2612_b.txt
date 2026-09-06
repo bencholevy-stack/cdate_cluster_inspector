@@ -1,0 +1,299 @@
+  for(const c of comps){
+    const bw=c.maxX-c.minX+1,bh=c.maxY-c.minY+1,short=Math.min(bw,bh);
+    // Tiny colour speckles are not partial fruits. A real visible fragment must still
+    // occupy a meaningful fraction of the expected fruit width.
+    if(short<typicalShort*.22 || c.area<typicalArea*.055)continue;
+    let eq;
+    if(c.area<typicalArea*.72) eq=1; // partial visible fruit counts as a whole fruit
+    else eq=Math.max(1,c.area/typicalArea); // merged same-colour mass can represent several fruits
+    eq=Math.min(24,eq);
+    eq=Math.round(eq*2)/2;
+    if(c.code===1)out.green+=eq;
+    else if(c.code===2)out.yellow+=eq;
+    else if(c.code===4)out.brown+=eq;
+    else if(c.code===5)out.dry+=eq;
+    else if(c.code===6)out.unknown+=eq;
+  }
+  out.totalValid=out.green+out.yellow+out.brown;
+  out.totalDetected=out.totalValid+out.dry+out.unknown;
+  return out;
+}
+
+function analyzeCanvas(sourceCanvas){
+  // Downscale for speed and stable local measurements
+  const maxW=420;
+  const scale=Math.min(1,maxW/sourceCanvas.width);
+  const w=Math.max(1,Math.round(sourceCanvas.width*scale));
+  const h=Math.max(1,Math.round(sourceCanvas.height*scale));
+  const c=document.createElement('canvas');c.width=w;c.height=h;
+  const ctx=c.getContext('2d',{willReadFrequently:true});
+  ctx.drawImage(sourceCanvas,0,0,w,h);
+  const img=ctx.getImageData(0,0,w,h), d=img.data;
+  const crop=APP.settings.crop;
+  const x0=Math.floor(w*(1-crop)/2), x1=Math.ceil(w*(1-(1-crop)/2));
+  const y0=Math.floor(h*(1-crop)/2), y1=Math.ceil(h*(1-(1-crop)/2));
+  const roi=detectClusterROIs(d,w,h,x0,y0,x1,y1);
+  const roiMask=roi.mask;
+  const counts={green:0,yellow:0,orange:0,brown:0,dry:0,unknown:0,total:0};
+
+  // Overlay on a second canvas
+  const ov=document.createElement('canvas');ov.width=w;ov.height=h;
+  const octx=ov.getContext('2d');octx.drawImage(c,0,0);
+  const oid=octx.getImageData(0,0,w,h), od=oid.data;
+  const palette={
+    green:[38,170,92],yellow:[255,215,35],orange:[241,137,48],brown:[138,88,51],dry:[120,102,143],unknown:[160,168,162]
+  };
+
+  // First pass: classify pixels. Second pass applies a spatial support gate to brown,
+  // which rejects many thin rachis/twig-like brown structures.
+  const classes=new Uint8Array(w*h); // 0 ignored background, 1 green, 2 yellow, 4 brown, 5 dry, 6 fruit-like unknown
+  const code={ignore:0,green:1,yellow:2,brown:4,dry:5,ambiguous:6};
+  const name=['ignore','green','yellow','unused','brown','dry','unknown'];
+  for(let y=y0;y<y1;y++){
+    for(let x=x0;x<x1;x++){
+      const q=y*w+x;if(!roiMask[q])continue;
+      const idx=q*4;classes[q]=code[classifyPixel(d[idx],d[idx+1],d[idx+2])];
+    }
+  }
+  // IMPORTANT: color alone is not accepted as fruit. Reject thin/elongated color components
+  // before any percentage is calculated. This removes many leaves, stems and rachis strands.
+  filterFruitLikeColorComponents(classes,w,h,x0,y0,x1,y1,1);
+  filterFruitLikeColorComponents(classes,w,h,x0,y0,x1,y1,2);
+  filterFruitLikeColorComponents(classes,w,h,x0,y0,x1,y1,4);
+  filterFruitLikeColorComponents(classes,w,h,x0,y0,x1,y1,6);
+  // Grow strict brown cores into adjacent bright/partly lit brown pixels. This prevents
+  // one real brown fruit from being fragmented into a tiny dark core plus yellow/unknown highlights.
+  // Growth is limited to pixels that independently satisfy a relaxed red-brown colour envelope.
+  for(let iter=0;iter<2;iter++){
+    const before=classes.slice();
+    for(let y=y0+1;y<y1-1;y++)for(let x=x0+1;x<x1-1;x++){
+      const q=y*w+x;if(!roiMask[q]||before[q]===4)continue;
+      if(before[q]!==2&&before[q]!==6)continue;
+      const idx=q*4;if(!isBrownSupport(d[idx],d[idx+1],d[idx+2]))continue;
+      let nearBrown=false;
+      for(let dy=-2;dy<=2&&!nearBrown;dy++)for(let dx=-2;dx<=2;dx++){
+        if(!dx&&!dy)continue;const nq=(y+dy)*w+(x+dx);if(before[nq]===4){nearBrown=true;break;}
+      }
+      if(nearBrown)classes[q]=4;
+    }
+  }
+
+  if(APP.settings.strictBrown){
+    // Connected-component brown gate. Brown must look like compact fruit regions,
+    // not thin rachis lines, isolated warm pixels or one large background patch.
+    const src=classes.slice(), seen=new Uint8Array(w*h), comps=[];
+    const cropArea=Math.max(1,(x1-x0)*(y1-y0));
+    const minArea=Math.max(5,Math.round(cropArea*0.000045));
+    const maxArea=Math.max(minArea*8,Math.round(cropArea*0.012));
+    for(let sy=y0;sy<y1;sy++)for(let sx=x0;sx<x1;sx++){
+      const start=sy*w+sx;if(src[start]!==4||seen[start])continue;
+      const stack=[start],pix=[];seen[start]=1;
+      let minX=sx,maxX=sx,minY=sy,maxY=sy;
+      while(stack.length){
+        const q=stack.pop(),qy=Math.floor(q/w),qx=q-qy*w;pix.push(q);
+        if(qx<minX)minX=qx;if(qx>maxX)maxX=qx;if(qy<minY)minY=qy;if(qy>maxY)maxY=qy;
+        for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+          if(!dx&&!dy)continue;const nx=qx+dx,ny=qy+dy;
+          if(nx<x0||nx>=x1||ny<y0||ny>=y1)continue;
+          const ni=ny*w+nx;if(!seen[ni]&&src[ni]===4){seen[ni]=1;stack.push(ni)}
+        }
+      }
+      const bw=maxX-minX+1,bh=maxY-minY+1,area=pix.length,fill=area/(bw*bh),aspect=bw/bh;
+      let colorfulNear=0;
+      const ex0=Math.max(x0,minX-3),ex1=Math.min(x1-1,maxX+3),ey0=Math.max(y0,minY-3),ey1=Math.min(y1-1,maxY+3);
+      for(let yy=ey0;yy<=ey1;yy++)for(let xx=ex0;xx<=ex1;xx++){
+        const q=src[yy*w+xx];if(q===1||q===2||q===3)colorfulNear++;
+      }
+      const compact=area>=minArea&&area<=maxArea&&bw>=3&&bh>=4&&fill>=.30&&aspect>=.30&&aspect<=3.0;
+      if(compact){
+        const tex=componentTextureMetrics(d,w,minX,minY,maxX,maxY,pix);
+        // Do not reject ordinary wrinkled Tamr merely because it is brown and textured.
+        // Dry/failed material must be substantially rougher/collapsed.
+        const dryLike=(
+          (tex.edgeMean>=.26 && tex.stdGray>=27 && tex.meanV<=.78) ||
+          (tex.edgeMean>=.34 && tex.stdGray>=22) ||
+          (tex.boundaryRatio>=.88 && tex.edgeMean>=.22 && tex.meanV<=.68)
+        );
+        if(dryLike){pix.forEach(q=>classes[q]=5);}
+        else comps.push({pix,area,fill,aspect});
+      }else pix.forEach(q=>classes[q]=0);
+    }
+    // A single valid brown fruit is allowed. Whole all-brown clusters are also valid;
+    // brown no longer requires neighbouring yellow/green evidence.
+  }
+  // Background and rejected pixels are ignored, not treated as Unknown.
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      const idx=(y*w+x)*4;
+      const q=y*w+x;
+      if(x<x0||x>=x1||y<y0||y>=y1||!roiMask[q]){
+        od[idx]=Math.round(od[idx]*.48+255*.52);od[idx+1]=Math.round(od[idx+1]*.48+255*.52);od[idx+2]=Math.round(od[idx+2]*.48+255*.52);
+        continue;
+      }
+      const ccode=classes[q];
+      if(ccode){const cl=name[ccode];counts[cl]++;counts.total++;}
+      // No fruit boxes are drawn here. This validation build refuses to visually claim
+      // object-level detections that the heuristic has not actually proved.
+    }
+  }
+  octx.putImageData(oid,0,0);
+  // Show exactly what part of the frame is analyzed. Everything outside these cyan strips is ignored.
+  octx.save();octx.font='800 9px system-ui';octx.textBaseline='top';
+  roi.rois.forEach((r,i)=>{
+    octx.strokeStyle='#118da8';octx.lineWidth=2;octx.setLineDash([7,4]);octx.strokeRect(r.x0+.5,r.y0+.5,r.x1-r.x0,r.y1-r.y0);octx.setLineDash([]);
+    const label=roi.fallback?'ANALYSIS ROI':`CLUSTER ROI ${i+1}`,tw=octx.measureText(label).width+8;
+    octx.fillStyle='rgba(255,255,255,.92)';octx.fillRect(r.x0,r.y0,tw,14);octx.fillStyle='#117b92';octx.fillText(label,r.x0+4,r.y0+2);
+  });octx.restore();
+  const diag=collectDiagnosticComponents(classes,w,h,x0,y0,x1,y1);
+  const fruitEq=estimateFruitEquivalents(diag,w,h);
+  // Intentionally no automatic fruit rectangles. The previous boxes were connected
+  // colour blobs, not trustworthy individual fruit detections.
+
+  // Percentages are object-equivalent based. Background is not Unknown.
+  // Unknown means only fruit-like components whose colour stage could not be resolved.
+  const pct={green:0,yellow:0,orange:0,brown:0,dry:0,unknown:0};
+  const eqValid=fruitEq.totalValid;
+  if(eqValid){
+    pct.green=100*fruitEq.green/eqValid;
+    pct.yellow=100*fruitEq.yellow/eqValid;
+    pct.brown=100*fruitEq.brown/eqValid;
+  }
+  pct.dry=fruitEq.totalDetected?100*fruitEq.dry/fruitEq.totalDetected:0;
+  const uncertaintyDen=fruitEq.totalValid+fruitEq.unknown;
+  pct.unknown=uncertaintyDen?100*fruitEq.unknown/uncertaintyDen:0;
+
+  // No artificial cap is applied. If true fruit-level uncertainty exceeds 5%, flag it;
+  // otherwise background clutter can no longer inflate Unknown into the 20% range.
+  const confidence=Math.max(0,Math.min(1,1-pct.unknown/100))*(roi.fallback?.88:1);
+  // Density is diagnostic only: recognized fruit-like pixels within the actual ROI.
+  // It must be explicitly computed here; v2.5 accidentally returned an undefined variable.
+  let roiPixels=0,recognizedPixels=0;
+  for(let q=0;q<roiMask.length;q++){
+    if(!roiMask[q])continue;
+    roiPixels++;
+    if(classes[q]!==0)recognizedPixels++;
+  }
+  const validDensity=roiPixels?recognizedPixels/roiPixels:0;
+  // Safety gate: a huge ROI with sparse accepted fruit evidence means cluster localization
+  // failed (typical symptom: trunk/rachis/leaves enter the brown count). Do not publish or rank
+  // such a frame. A genuine close-up cluster can occupy the whole frame, but then validDensity
+  // should be high.
+  const roiReliable=!(roi.coverage>.72 && validDensity<.34) && fruitEq.totalValid>=3;
+  const invalidReason=roiReliable?'':'AUTO CLUSTER LOCATION FAILED — result suppressed; correct/teach the cluster area.';
+  return {
+    counts,pct,confidence:roiReliable?confidence:0,
+    analysisValid:roiReliable,invalidReason,
+    overlayUrl:ov.toDataURL('image/jpeg',.88),
+    analysisWidth:w,analysisHeight:h,
+    validDensity,fruitEq,roi:{count:roi.rois.length,coverage:roi.coverage,fallback:roi.fallback,reliable:roiReliable}
+  };
+}
+
+function sharpnessOfCanvas(c){
+  const w=Math.min(180,c.width), h=Math.max(1,Math.round(c.height*w/c.width));
+  const t=document.createElement('canvas');t.width=w;t.height=h;
+  const ctx=t.getContext('2d',{willReadFrequently:true});ctx.drawImage(c,0,0,w,h);
+  const d=ctx.getImageData(0,0,w,h).data;
+  let sum=0,n=0;
+  for(let y=1;y<h-1;y+=2)for(let x=1;x<w-1;x+=2){
+    const i=(y*w+x)*4;
+    const g0=(d[i]+d[i+1]+d[i+2])/3;
+    const ids=[((y-1)*w+x)*4,((y+1)*w+x)*4,(y*w+x-1)*4,(y*w+x+1)*4];
+    let lap=-4*g0;
+    ids.forEach(j=>lap+=(d[j]+d[j+1]+d[j+2])/3);
+    sum+=lap*lap;n++;
+  }
+  return n?sum/n:0;
+}
+async function imageFileToFrame(file){
+  return new Promise((resolve,reject)=>{
+    const url=URL.createObjectURL(file),img=new Image();
+    img.onload=()=>{
+      const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;
+      c.getContext('2d').drawImage(img,0,0);
+      const raw=c.toDataURL('image/jpeg',.92);
+      URL.revokeObjectURL(url);
+      resolve([{canvas:c,raw,sharpness:sharpnessOfCanvas(c),time:0}]);
+    };
+    img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('Cannot read image'))};
+    img.src=url;
+  });
+}
+async function videoFileToFrames(file){
+  return new Promise((resolve,reject)=>{
+    const url=URL.createObjectURL(file),v=document.createElement('video');
+    v.muted=true;v.playsInline=true;v.preload='metadata';
+    const timeout=setTimeout(()=>{URL.revokeObjectURL(url);reject(new Error('Video timed out'))},45000);
+    v.onloadedmetadata=()=>{
+      const dur=Math.max(.5,v.duration||4);
+      const sampleN=Math.max(6,APP.settings.framesPerVideo*3);
+      const times=Array.from({length:sampleN},(_,i)=>dur*(.08+(i/(sampleN-1))*.84));
+      const out=[];let idx=0;
+      const capture=()=>{
+        if(idx>=times.length){
+          clearTimeout(timeout);URL.revokeObjectURL(url);
+          out.sort((a,b)=>b.sharpness-a.sharpness);
+          resolve(out.slice(0,APP.settings.framesPerVideo).sort((a,b)=>a.time-b.time));
+          return;
+        }
+        v.currentTime=Math.min(dur-.02,times[idx]);
+      };
+      v.onseeked=()=>{
+        try{
+          const maxDim=1400,scale=Math.min(1,maxDim/Math.max(v.videoWidth||640,v.videoHeight||480));
+          const c=document.createElement('canvas');c.width=Math.round((v.videoWidth||640)*scale);c.height=Math.round((v.videoHeight||480)*scale);
+          c.getContext('2d').drawImage(v,0,0,c.width,c.height);
+          out.push({canvas:c,raw:c.toDataURL('image/jpeg',.9),sharpness:sharpnessOfCanvas(c),time:times[idx]});
+        }catch(e){}
+        idx++;capture();
+      };
+      capture();
+    };
+    v.onerror=()=>{clearTimeout(timeout);URL.revokeObjectURL(url);reject(new Error('Cannot read video'))};
+    v.src=url;
+  });
+}
+
+$('runBtn').onclick=async()=>{
+  if(!APP.files.length)return;
+  $('progressCard').style.display='block';
+  $('sessionSummaryCard').style.display='none';
+  $('resultsList').innerHTML='';
+  APP.results={};
+  for(let i=0;i<APP.files.length;i++){
+    const f=APP.files[i];
+    $('progressFill').style.width=Math.round(i/APP.files.length*100)+'%';
+    $('progressText').textContent=`${i+1} / ${APP.files.length} — ${f.name}`;
+    const stat=$('fstat-'+i); if(stat){stat.textContent='working';stat.className='tag'}
+    try{
+      const frames=f.type==='video'?await videoFileToFrames(f.file):await imageFileToFrame(f.file);
+      const frameResults=frames.map((fr,idx)=>{
+        const a=analyzeCanvas(fr.canvas);
+        return {...a,raw:fr.raw,time:fr.time,frameNo:idx+1,sharpness:fr.sharpness};
+      });
+      const agg=aggregateFrames(frameResults);
+      const rec={name:f.name,tree:f.tree,side:f.side,frames:frameResults,...agg};
+      if(f.tree){
+        if(!APP.results[f.tree])APP.results[f.tree]={tree:f.tree,sides:{},avg:null};
+        APP.results[f.tree].sides[f.side||'X']=rec;
+      }else{
+        APP.results['extra_'+i]={tree:null,sides:{X:rec},avg:rec};
+      }
+      f.status='done'; if(stat){stat.textContent='done';stat.className='tag done'}
+      renderFileResult(rec);
+    }catch(err){
+      f.status='error'; if(stat){stat.textContent='error';stat.className='tag err'}
+      renderErrorResult(f,err);
+    }
+    await new Promise(r=>setTimeout(r,30));
+  }
+  combineTreeSides();
+  computeTreeRankings();
+  saveLocal();
+  $('progressFill').style.width='100%';
+  $('progressText').textContent='Complete — everything was analyzed locally.';
+  updateSessionSummary();
+  $('sessionSummaryCard').style.display='block';
+  renderFileList();
+};
+
