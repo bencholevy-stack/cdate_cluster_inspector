@@ -1,0 +1,156 @@
+cked=(APP.treeStatus[key]||'unpicked')!=='unpicked';
+      let fill='#f3f6f1',stroke='#d3ddd1';
+      if(picked){fill='#bdc5be';stroke='#aab3ab'}
+      else if(res){analyzed++;fill=heatColor(res.relativePct);stroke='#8e845f'}
+      ctx.beginPath();ctx.arc(x,y,R,0,Math.PI*2);ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle=stroke;ctx.lineWidth=1.4;ctx.stroke();
+      if(res&&!picked){
+        ctx.fillStyle=res.relativePct>=72?'#fff':'#263228';ctx.font='900 11px system-ui';ctx.textAlign='center';ctx.fillText(res.relativePct+'%',x,y+4);
+        ctx.fillStyle='#ffffff';ctx.beginPath();ctx.arc(x+R-3,y-R+3,8,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#758276';ctx.lineWidth=1;ctx.stroke();
+        ctx.fillStyle='#334138';ctx.font='900 8px system-ui';ctx.fillText(String(res.dayBucket),x+R-3,y-R+6);
+      }else if(picked){ctx.fillStyle='#6f776f';ctx.font='900 13px system-ui';ctx.textAlign='center';ctx.fillText('✓',x,y+4)}
+      ctx.fillStyle='#617067';ctx.font='700 8px system-ui';ctx.textAlign='center';ctx.fillText(key,x,y+R+11);
+      APP.map1HitAreas.push({key,x,y,r:R+5});
+    }
+  });
+  c.onclick=e=>{
+    const rect=c.getBoundingClientRect(),x=(e.clientX-rect.left)*c.width/rect.width,y=(e.clientY-rect.top)*c.height/rect.height;
+    const hit=APP.map1HitAreas.find(h=>Math.hypot(x-h.x,y-h.y)<=h.r);if(hit&&getTreeResult(hit.key))openTreeDetails(hit.key);
+  };
+  const total=Object.values(APP.results).filter(t=>t.tree&&t.avg).length;
+  const mode=(APP.settings.rankMode||'auto');
+  $('map1Summary').textContent=`${analyzed} analyzed trees · ranking mode: ${mode.toUpperCase()} · % inside circles = relative plantation urgency · small badge = picking day (${APP.treesPerDay} trees/day).`;
+}
+$('printMap1Btn').onclick=()=>window.print();
+
+function buildDaySelector(){
+  computeTreeRankings();
+  const maxDay=Math.max(1,...Object.values(APP.results).map(t=>t.dayBucket||1));
+  $('daySel').innerHTML='';
+  for(let d=1;d<=maxDay;d++){
+    const b=document.createElement('button');b.className='day'+(d===APP.selectedDay?' on':'');b.textContent='Day '+d;
+    b.onclick=()=>{APP.selectedDay=d;renderRoute()};
+    $('daySel').appendChild(b);
+  }
+}
+function dayTrees(day){
+  return Object.values(APP.results).filter(t=>t.tree&&t.dayBucket===day&&(APP.treeStatus[t.tree]||'unpicked')==='unpicked')
+    .sort((a,b)=>a.rank-b.rank).map(t=>t.tree);
+}
+function renderRoute(){
+  computeTreeRankings();buildDaySelector();
+  if(!APP.rows.length){$('routeSummary').textContent='Save plantation setup first.';return}
+  const today=dayTrees(APP.selectedDay),todaySet=new Set(today);
+  const c=$('routeCanvas'),R=17,gap=10,rowGap=14,margin=34,maxN=Math.max(...APP.rows.map(r=>r.count));
+  c.width=margin*2+maxN*(R*2+gap);c.height=margin*2+APP.rows.length*(R*2+rowGap)+45;
+  const ctx=c.getContext('2d');ctx.fillStyle='#fbfdfb';ctx.fillRect(0,0,c.width,c.height);
+  const pos={};
+  APP.rows.forEach((row,ri)=>{
+    const y=margin+ri*(R*2+rowGap)+R;
+    ctx.fillStyle='#218c55';ctx.font='bold 11px system-ui';ctx.textAlign='right';ctx.fillText(row.letter,margin-7,y+4);
+    for(let i=1;i<=row.count;i++)pos[row.letter+i]={x:margin+(i-1)*(R*2+gap)+R,y};
+  });
+  const ordered=[];
+  let forward=true;
+  APP.rows.forEach(row=>{
+    const arr=today.filter(k=>k[0]===row.letter).sort((a,b)=>parseInt(a.slice(1))-parseInt(b.slice(1)));
+    if(!forward)arr.reverse();
+    ordered.push(...arr);forward=!forward;
+  });
+  ctx.strokeStyle='rgba(33,140,85,.55)';ctx.lineWidth=2;
+  for(let i=0;i<ordered.length-1;i++){
+    const a=pos[ordered[i]],b=pos[ordered[i+1]];if(!a||!b)continue;
+    ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
+  }
+  APP.rows.forEach(row=>{for(let i=1;i<=row.count;i++){
+    const key=row.letter+i,p=pos[key],st=APP.treeStatus[key]||'unpicked',idx=ordered.indexOf(key);
+    ctx.beginPath();ctx.arc(p.x,p.y,R,0,Math.PI*2);
+    if(st!=='unpicked'){ctx.fillStyle='#c3cbc4';ctx.strokeStyle='#aeb7af'}
+    else if(todaySet.has(key)){ctx.fillStyle='#dff3e7';ctx.strokeStyle='#218c55'}
+    else{ctx.fillStyle='#edf3eb';ctx.strokeStyle='#d0dbcf'}
+    ctx.fill();ctx.lineWidth=1.5;ctx.stroke();
+    ctx.fillStyle='#243026';ctx.font='bold 8px system-ui';ctx.textAlign='center';ctx.fillText(st!=='unpicked'?'✓':key,p.x,p.y+3);
+    if(idx>=0){
+      ctx.fillStyle='#218c55';ctx.beginPath();ctx.arc(p.x+R-3,p.y-R+3,7,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='white';ctx.font='bold 7px system-ui';ctx.fillText(idx+1,p.x+R-3,p.y-R+5);
+    }
+  }});
+  $('routeSummary').textContent=`Day ${APP.selectedDay}: ${ordered.length} trees currently unpicked · Day 1 is the next picking day; later numbers follow relative plantation ranking.`;
+  c.onclick=e=>{
+    if(!APP.editRoute)return;
+    const rect=c.getBoundingClientRect(),x=(e.clientX-rect.left)*c.width/rect.width,y=(e.clientY-rect.top)*c.height/rect.height;
+    for(const [k,p] of Object.entries(pos)){
+      if(Math.hypot(x-p.x,y-p.y)<=R+3){
+        APP.treeStatus[k]=(APP.treeStatus[k]||'unpicked')==='unpicked'?'picked':'unpicked';saveLocal();renderRoute();renderMap1();return;
+      }
+    }
+  };
+}
+$('toggleEditBtn').onclick=()=>{
+  APP.editRoute=!APP.editRoute;$('toggleEditBtn').textContent='Manual edit: '+(APP.editRoute?'ON':'OFF');
+  toast(APP.editRoute?'Tap trees to toggle picked/unpicked':'Manual editing off');
+};
+$('completeDayBtn').onclick=()=>{
+  const trees=dayTrees(APP.selectedDay);
+  if(!trees.length){toast('No unpicked trees in this day');return}
+  if(!confirm(`Mark ${trees.length} trees in Day ${APP.selectedDay} as picked?`))return;
+  trees.forEach(k=>APP.treeStatus[k]='picked');saveLocal();renderRoute();renderMap1();toast('Day completed');
+};
+$('printRouteBtn').onclick=()=>window.print();
+
+loadLocal();
+if((APP.settings.brownBright??.56)>.60)APP.settings.brownBright=.56;
+if((APP.settings.brownDom??14)<12)APP.settings.brownDom=14;
+APP.settings.brownPresenceMin=Math.max(1.5,APP.settings.brownPresenceMin||0);
+if(APP.settings.autoROI===undefined)APP.settings.autoROI=true;
+APP.currentTab='setup';initBackGuard();refreshTrainingSummary();
+$('nrows').value=APP.rows.length||10;
+$('defaultTrees').value=APP.rows[0]?.count||20;
+$('treesPerDay').value=APP.treesPerDay;
+buildRowsTable();
+if(APP.rows.length)APP.rows.forEach(r=>{const el=$('row-'+r.letter);if(el)el.value=r.count});
+applySettingsUI();renderCalSummary();updatePlantationPill();computeTreeRankings();
+</script>
+
+<script>
+(()=>{
+  const PWA_VERSION='2.8.0';
+  const DB='dci-share-db', STORE='pending';
+  let installEvent=null,lastCount=-1;
+  const standalone=()=>window.matchMedia?.('(display-mode: standalone)')?.matches||navigator.standalone===true;
+  function openShareDB(){return new Promise((resolve,reject)=>{const q=indexedDB.open(DB,1);q.onupgradeneeded=()=>{if(!q.result.objectStoreNames.contains(STORE))q.result.createObjectStore(STORE,{keyPath:'id',autoIncrement:true})};q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error)})}
+  async function drainShared(){
+    try{
+      const db=await openShareDB();
+      const items=await new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readonly'),q=tx.objectStore(STORE).getAll();q.onsuccess=()=>resolve(q.result||[]);q.onerror=()=>reject(q.error)});
+      if(!items.length){db.close();return 0}
+      items.sort((a,b)=>(a.batch-b.batch)||(a.order-b.order)||(a.id-b.id));
+      const files=items.map(x=>new File([x.blob],x.name||`Gallery_${x.id}.jpg`,{type:x.type||x.blob?.type||'image/jpeg',lastModified:x.lastModified||Date.now()}));
+      await new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).clear();tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)});db.close();
+      queuePickedFiles(files,'Gallery Share');
+      switchTab('analyze');
+      showPickerDiagnostic(`<b>Gallery Share:</b> ${files.length} photo${files.length===1?'':'s'} received and queued.`,false);
+      return files.length;
+    }catch(e){console.error('Gallery Share import failed',e);return 0}
+  }
+  function count(){try{return (APP.files||[]).filter(f=>f&&f.type==='image').length}catch(_){return 0}}
+  function ensureBar(){
+    if(document.getElementById('dciPwaBar'))return;
+    const st=document.createElement('style');st.textContent='#dciPwaBar{position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:10000;background:#fff;border:1px solid #cfe1d2;border-radius:16px;padding:10px;box-shadow:0 10px 34px rgba(20,60,32,.22)}#dciPwaBtn{display:block;width:100%;min-height:54px;border:0;border-radius:12px;background:#218c55;color:white;font-weight:900;font-size:16px}#dciPwaHint{margin:7px 4px 0;color:#68806c;font-size:11px;line-height:1.35;text-align:center}body{padding-bottom:116px!important}';document.head.appendChild(st);
+    const x=document.createElement('div');x.id='dciPwaBar';x.className='noprint';x.innerHTML='<button id="dciPwaBtn" type="button"></button><div id="dciPwaHint"></div>';document.body.appendChild(x);$('dciPwaBtn').onclick=action;
+  }
+  function refresh(){ensureBar();const b=$('dciPwaBtn'),h=$('dciPwaHint'),n=count();lastCount=n;b.disabled=false;if(n){b.textContent=`ANALYZE ALL ${n} PHOTO${n===1?'':'S'}`;h.textContent=`${n} photo${n===1?'':'s'} in the original v2.6.12 queue.`;return}if(standalone()){b.textContent='UPDATE APP';h.textContent=`PWA ${PWA_VERSION} · original core 2.6.12. Gallery → select many → Share → Date Cluster Inspector.`;return}if(installEvent){b.textContent='INSTALL GALLERY IMPORT';h.textContent='Install once so Gallery can share multiple selected photos directly into the app.';return}b.textContent='OPEN IN CHROME';h.textContent='Open in Chrome to install Gallery Share import.'}
+  async function action(){
+    const n=count();if(n){switchTab('analyze');const r=$('runBtn');if(r){r.scrollIntoView({behavior:'smooth',block:'center'});setTimeout(()=>r.click(),120)}return}
+    if(standalone()){const b=$('dciPwaBtn');b.disabled=true;b.textContent='UPDATING…';try{const reg=await navigator.serviceWorker?.getRegistration('./');if(reg){await reg.update();if(reg.waiting)reg.waiting.postMessage({type:'SKIP_WAITING'})}}catch(_){}setTimeout(()=>location.replace('./?v='+Date.now()),800);return}
+    if(installEvent){const e=installEvent;installEvent=null;try{e.prompt();await e.userChoice}catch(_){}setTimeout(refresh,300);return}
+    location.href='intent://bencholevy-stack.github.io/cdate_cluster_inspector/#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=https%3A%2F%2Fbencholevy-stack.github.io%2Fcdate_cluster_inspector%2F;end';
+  }
+  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEvent=e;refresh()});
+  window.addEventListener('appinstalled',()=>setTimeout(refresh,300));
+  window.addEventListener('load',async()=>{ensureBar();if('serviceWorker'in navigator){try{await navigator.serviceWorker.register('./sw.js',{scope:'./'})}catch(e){console.error(e)}}await drainShared();refresh();setInterval(()=>{const n=count();if(n!==lastCount)refresh()},500)});
+  setTimeout(()=>{ensureBar();refresh()},300);
+})();
+</script>
+
+</body>
+</html>
