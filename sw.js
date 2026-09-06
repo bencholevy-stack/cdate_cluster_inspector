@@ -1,5 +1,6 @@
-const CACHE_NAME='dci-pwa-2.7.9';
-const APP_SHELL=['./','./index.html','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png'];
+const CACHE_NAME='dci-pwa-2.8.0';
+const FULL_CORE=Array.from({length:8},(_,i)=>`./fullcore280/part${String(i+1).padStart(2,'0')}.txt`);
+const APP_SHELL=['./','./index.html','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png',...FULL_CORE];
 
 self.addEventListener('install',event=>{
   self.skipWaiting();
@@ -67,7 +68,7 @@ self.addEventListener('fetch',event=>{
 
   if(event.request.method!=='GET') return;
   const sameOrigin=url.origin===self.location.origin;
-  const isAppFile=sameOrigin && (event.request.mode==='navigate' || /\/(index\.html|index\.part\d+\.txt|core_patch_2612_[ab]\.txt|manifest\.webmanifest|sw\.js)(\?|$)/.test(url.pathname+url.search));
+  const isAppFile=sameOrigin && (event.request.mode==='navigate' || /\/(index\.html|fullcore280\/part\d+\.txt|manifest\.webmanifest|sw\.js)(\?|$)/.test(url.pathname+url.search));
   if(isAppFile){
     event.respondWith((async()=>{
       try{
