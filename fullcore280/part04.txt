@@ -1,0 +1,334 @@
+').value=Math.round(APP.settings.satCut*100); $('satVal').textContent=$('satCut').value;
+  $('brownBright').value=Math.round(APP.settings.brownBright*100); $('brownBrightVal').textContent=$('brownBright').value;
+  $('brownDom').value=APP.settings.brownDom; $('brownDomVal').textContent=$('brownDom').value;
+  $('framesPerVideo').value=APP.settings.framesPerVideo;
+  $('strictBrownToggle').classList.toggle('on',APP.settings.strictBrown);
+  $('autoRoiToggle').classList.toggle('on',APP.settings.autoROI!==false);
+  document.querySelectorAll('#cropSeg .seg').forEach(x=>x.classList.toggle('on',Math.abs(parseFloat(x.dataset.crop)-APP.settings.crop)<.001));
+  document.querySelectorAll('#rankModeSeg .seg').forEach(x=>x.classList.toggle('on',x.dataset.rankmode===APP.settings.rankMode));
+}
+
+function updatePlantationPill(){
+  const total=APP.rows.reduce((s,r)=>s+r.count,0);
+  $('plantationPill').textContent=total?`${APP.rows.length} rows · ${total} trees · ${total*2} sides`:'No plantation saved';
+}
+
+// GALLERY MULTISELECT RESTORE (v2.6.12)
+// IMPORTANT: keep the actual image input over the visible Gallery control.
+// Do NOT route this through showOpenFilePicker(): that Android path opens Files/Drive
+// and removes Gallery access. The native HTML image picker is deliberately used here.
+function showPickerDiagnostic(message, fatal=false){
+  const box=$('pickerDiagnostic');
+  if(!box) return;
+  box.style.display='block';
+  box.style.borderColor=fatal?'#e29393':'#d6c79a';
+  box.style.background=fatal?'#fff1f1':'#fff9e8';
+  box.style.color=fatal?'#8b1e1e':'#6e5710';
+  box.innerHTML=message;
+}
+function clearPickerDiagnostic(){
+  const box=$('pickerDiagnostic'); if(box){box.style.display='none';box.textContent='';}
+}
+function queuePickedFiles(files, source){
+  const arr=Array.from(files||[]).filter(f=>f && (f.type||'').startsWith('image/'));
+  if(!arr.length) return;
+  const incoming=arr.map(f=>({
+    file:f,name:f.name,type:'image',timestamp:f.lastModified||0,tree:null,side:null,status:'pending',source:source||'picker',relativePath:f.webkitRelativePath||f.relativePath||''
+  }));
+  APP.files=[...APP.files,...incoming].sort((a,b)=>a.timestamp-b.timestamp);
+  assignSlots(); renderFileList();
+  showPickerDiagnostic(`<b>${escapeHtml(source||'Import')}:</b> ${arr.length} photo${arr.length===1?'':'s'} received and queued.`,false);
+}
+
+async function chooseMultiplePhotosReliable(){
+  clearPickerDiagnostic();
+  if(typeof window.showOpenFilePicker!=='function'){
+    showPickerDiagnostic('<b>Reliable picker unavailable in this Chrome build.</b> Opening Gallery fallback.',true);
+    $('mediaInput').click();
+    return;
+  }
+  try{
+    const handles=await window.showOpenFilePicker({
+      multiple:true,
+      startIn:'pictures',
+      id:'date-cluster-photos',
+      types:[{description:'Photos',accept:{'image/*':['.jpg','.jpeg','.png','.webp','.heic','.heif']}}],
+      excludeAcceptAllOption:false
+    });
+    const files=[];
+    for(const h of handles){
+      try{const f=await h.getFile(); if((f.type||'').startsWith('image/')) files.push(f);}catch(_){}
+    }
+    queuePickedFiles(files,'Multiple-photo picker');
+  }catch(err){
+    if(err && err.name==='AbortError') return;
+    showPickerDiagnostic('<b>Photo picker error:</b> '+escapeHtml(err?.message||String(err)),true);
+  }
+}
+
+async function collectImagesFromDirectory(dirHandle, prefix='', out=[]){
+  for await(const [name,handle] of dirHandle.entries()){
+    if(handle.kind==='file'){
+      try{
+        const f=await handle.getFile();
+        if((f.type||'').startsWith('image/')){
+          try{Object.defineProperty(f,'relativePath',{value:prefix+name,configurable:true});}catch(_){}
+          out.push(f);
+        }
+      }catch(_){}
+    }else if(handle.kind==='directory'){
+      await collectImagesFromDirectory(handle,prefix+name+'/',out);
+    }
+  }
+  return out;
+}
+
+async function choosePhotoFolderReliable(){
+  clearPickerDiagnostic();
+  if(typeof window.showDirectoryPicker!=='function'){
+    showPickerDiagnostic('<b>Folder picker unavailable in this Chrome build.</b>',true);
+    return;
+  }
+  try{
+    const dir=await window.showDirectoryPicker({startIn:'pictures',id:'date-cluster-folder',mode:'read'});
+    showPickerDiagnostic('<b>Reading folder…</b>',false);
+    const files=await collectImagesFromDirectory(dir);
+    if(!files.length){
+      showPickerDiagnostic('<b>No image files found in that folder.</b>',true);
+      return;
+    }
+    queuePickedFiles(files,`Folder ${dir.name}`);
+  }catch(err){
+    if(err && err.name==='AbortError') return;
+    showPickerDiagnostic('<b>Folder picker error:</b> '+escapeHtml(err?.message||String(err)),true);
+  }
+}
+
+$('multiPhotosBtn').onclick=chooseMultiplePhotosReliable;
+$('photoFolderBtn').onclick=choosePhotoFolderReliable;
+$('mediaInput').onchange=e=>{
+  const raw=e.currentTarget.files;
+  const count=raw ? raw.length : 0;
+  if(count===1 && e.currentTarget.multiple){
+    showPickerDiagnostic(
+      `<b>MULTISELECT ERROR M1:</b> Gallery returned only <b>1 photo</b> to the app even though the picker is marked <b>multiple</b>. `+
+      `This was detected before the queue. No files were dropped by Date Cluster Inspector.`, true
+    );
+  } else if(count>1){
+    clearPickerDiagnostic();
+  }
+  queuePickedFiles(raw,'Gallery');
+  // Clear only after the FileList has been copied, so selecting the same batch later is possible.
+  e.currentTarget.value='';
+};
+function buildSlots(){
+  const slots=[];
+  for(const row of APP.rows){
+    for(let i=1;i<=row.count;i++) slots.push({tree:row.letter+i,side:'A'});
+    for(let i=row.count;i>=1;i--) slots.push({tree:row.letter+i,side:'B'});
+  }
+  return slots;
+}
+function assignSlots(){
+  const slots=buildSlots();
+  APP.files.forEach((f,i)=>{
+    if(slots[i]){f.tree=slots[i].tree;f.side=slots[i].side}
+    else{f.tree=null;f.side=null}
+  });
+}
+function renderFileList(){
+  $('fileList').innerHTML='';
+  APP.files.forEach((f,i)=>{
+    const d=document.createElement('div');d.className='file';
+    d.innerHTML=`<div class="n">${i+1}</div><div class="name">${escapeHtml(f.relativePath||f.name)} ${f.tree?`→ ${f.tree}-${f.side}`:''}</div><div class="tag ${f.status==='done'?'done':f.status==='error'?'err':''}" id="fstat-${i}">${f.status==='done'?'done':f.status==='error'?'error':'ready'}</div>`;
+    $('fileList').appendChild(d);
+  });
+  $('fileListWrap').style.display=APP.files.length?'block':'none';
+  const qs=$('queueSummary');if(qs)qs.textContent=`${APP.files.length} file${APP.files.length===1?'':'s'} queued · ${APP.files.filter(f=>f.type==='image').length} photos · ${APP.files.filter(f=>f.type==='video').length} videos`;
+}
+$('clearFilesBtn').onclick=()=>{
+  APP.files=[];renderFileList();
+  const el=$('mediaInput');if(el)el.value='';
+  clearPickerDiagnostic();
+};
+
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
+
+function rgbToHsv(r,g,b){
+  r/=255;g/=255;b/=255;
+  const max=Math.max(r,g,b),min=Math.min(r,g,b),d=max-min;
+  let h=0;
+  if(d!==0){
+    if(max===r) h=60*(((g-b)/d)%6);
+    else if(max===g) h=60*((b-r)/d+2);
+    else h=60*((r-g)/d+4);
+  }
+  if(h<0)h+=360;
+  return {h,s:max===0?0:d/max,v:max};
+}
+function hueDist(a,b){const d=Math.abs(a-b);return Math.min(d,360-d)}
+function centroid(samples){
+  if(!samples||!samples.length)return null;
+  let x=0,y=0,s=0,v=0;
+  samples.forEach(p=>{const rad=p.h*Math.PI/180;x+=Math.cos(rad);y+=Math.sin(rad);s+=p.s;v+=p.v});
+  return {h:(Math.atan2(y,x)*180/Math.PI+360)%360,s:s/samples.length,v:v/samples.length}
+}
+function learnedClass(hsv){
+  const classes=['green','yellow','orange','brown','ignore'];
+  let best=null,bd=Infinity;
+  for(const c of classes){
+    if(APP.calibration[c].length<3) continue;
+    const cc=centroid(APP.calibration[c]);
+    const dh=hueDist(hsv.h,cc.h)/60;
+    const ds=(hsv.s-cc.s)*1.8;
+    const dv=(hsv.v-cc.v)*1.5;
+    const d=dh*dh+ds*ds+dv*dv;
+    if(d<bd){bd=d;best=c}
+  }
+  return bd<1.05?best:null;
+}
+function isBrownSupport(r,g,b){
+  const hsv=rgbToHsv(r,g,b);
+  const gb=(g-b)/Math.max(1,r),rg=(r-g)/Math.max(1,r);
+  // Brown support is deliberately narrower than yellow/orange. Shadowed golden Khalal
+  // commonly falls around 18–30 degrees and must not become brown merely because it is dark.
+  const redBrown=(hsv.h<=16||hsv.h>=340) && hsv.s>=.17 && hsv.v>=.12 && hsv.v<=.93 && rg>.075 && gb<.20;
+  const darkWarmBrown=(hsv.h>16&&hsv.h<=30) && hsv.s>=.28 && hsv.v<=.55 && rg>.18 && gb<.14 && r>g*1.08;
+  return redBrown||darkWarmBrown;
+}
+function classifyPixel(r,g,b){
+  const hsv=rgbToHsv(r,g,b);
+  if(hsv.v<Math.min(.12,APP.settings.shadowCut*.8) || hsv.s<.07) return 'ignore';
+
+  const learned=learnedClass(hsv);
+  if(learned){
+    if(learned==='ignore') return 'ignore';
+    if(learned==='orange') return 'yellow';
+    return learned;
+  }
+
+  // Healthy amber/orange Khalal is YELLOW. Brown is allowed on both sides of the
+  // hue wrap (e.g. 358° is just as red-brown as 2°) and can remain fairly bright.
+  const gb=(g-b)/Math.max(1,r);
+  const rg=(r-g)/Math.max(1,r);
+
+  if(hsv.h>=72 && hsv.h<=150 && hsv.s>=.13 && hsv.v>=.15) return 'green';
+
+  const brownLike=isBrownSupport(r,g,b);
+  if(brownLike) return 'brown';
+
+  // Healthy Khalal includes yellow, gold and amber. In particular, 16–30 degree warm
+  // fruit colours default to yellow unless they satisfy the much stronger brown support rule.
+  if(hsv.h>=16 && hsv.h<=72 && hsv.s>=.09 && hsv.v>=.14) return 'yellow';
+
+  // Resolve most boundary fruit colours rather than inflating Unknown. These pixels
+  // are still subject to the later fruit-shape filter, so leaves/background do not
+  // automatically enter the fruit denominator.
+  if(hsv.h>72 && hsv.h<=88 && hsv.s>=.09 && hsv.v>=.14) return 'green';
+
+  // Reserve Unknown for genuinely low-confidence fruit-colour pixels only.
+  if(((hsv.h>=12&&hsv.h<16)||(hsv.h>88&&hsv.h<=100)) && hsv.s>=.09 && hsv.v>=.14) return 'ambiguous';
+
+  return 'ignore';
+}
+
+function componentTextureMetrics(data,w,minX,minY,maxX,maxY,pix){
+  const bw=maxX-minX+1,bh=maxY-minY+1;
+  const mask=new Uint8Array(bw*bh);
+  pix.forEach(q=>{const py=(q/w)|0,px=q-py*w;mask[(py-minY)*bw+(px-minX)]=1;});
+  let n=0,sumV=0,sumGray=0,sumGray2=0,edgeSum=0,edgeN=0,boundary=0;
+  for(let yy=0;yy<bh;yy++){
+    for(let xx=0;xx<bw;xx++){
+      const mi=yy*bw+xx;if(!mask[mi])continue;
+      const x=minX+xx,y=minY+yy,idx=(y*w+x)*4;
+      const r=data[idx],g=data[idx+1],b=data[idx+2];
+      const gray=.299*r+.587*g+.114*b;
+      const hsv=rgbToHsv(r,g,b);
+      n++;sumV+=hsv.v;sumGray+=gray;sumGray2+=gray*gray;
+      let openEdge=false;
+      if(xx===0||!mask[yy*bw+xx-1]) openEdge=true;
+      if(xx===bw-1||!mask[yy*bw+xx+1]) openEdge=true;
+      if(yy===0||!mask[(yy-1)*bw+xx]) openEdge=true;
+      if(yy===bh-1||!mask[(yy+1)*bw+xx]) openEdge=true;
+      if(openEdge) boundary++;
+      if(xx+1<bw && mask[yy*bw+xx+1]){
+        const j=(y*w+(x+1))*4;const gray2=.299*data[j]+.587*data[j+1]+.114*data[j+2];
+        edgeSum+=Math.abs(gray-gray2);edgeN++;
+      }
+      if(yy+1<bh && mask[(yy+1)*bw+xx]){
+        const j=((y+1)*w+x)*4;const gray2=.299*data[j]+.587*data[j+1]+.114*data[j+2];
+        edgeSum+=Math.abs(gray-gray2);edgeN++;
+      }
+    }
+  }
+  const meanGray=n?sumGray/n:0;
+  const stdGray=n?Math.sqrt(Math.max(0,sumGray2/n-meanGray*meanGray)):0;
+  return {meanV:n?sumV/n:0,stdGray,edgeMean:edgeN?edgeSum/edgeN/255:0,boundaryRatio:n?boundary/n:0};
+}
+
+function filterFruitLikeColorComponents(classes,w,h,x0,y0,x1,y1,classCode){
+  const src=classes.slice(),seen=new Uint8Array(w*h),cropArea=Math.max(1,(x1-x0)*(y1-y0));
+  const minArea=Math.max(6,Math.round(cropArea*.000045));
+  const hugeArea=Math.round(cropArea*.055);
+  for(let sy=y0;sy<y1;sy++)for(let sx=x0;sx<x1;sx++){
+    const start=sy*w+sx;if(src[start]!==classCode||seen[start])continue;
+    const stack=[start],pix=[];seen[start]=1;let minX=sx,maxX=sx,minY=sy,maxY=sy;
+    while(stack.length){
+      const q=stack.pop(),qy=(q/w)|0,qx=q-qy*w;pix.push(q);
+      if(qx<minX)minX=qx;if(qx>maxX)maxX=qx;if(qy<minY)minY=qy;if(qy>maxY)maxY=qy;
+      for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+        if(!dx&&!dy)continue;const nx=qx+dx,ny=qy+dy;if(nx<x0||nx>=x1||ny<y0||ny>=y1)continue;
+        const ni=ny*w+nx;if(!seen[ni]&&src[ni]===classCode){seen[ni]=1;stack.push(ni)}
+      }
+    }
+    const bw=maxX-minX+1,bh=maxY-minY+1,area=pix.length,fill=area/(bw*bh),aspect=bw/bh;
+    let boundary=0;
+    for(const q of pix){const qy=(q/w)|0,qx=q-qy*w;
+      if(qx===minX||qx===maxX||qy===minY||qy===maxY) boundary++;
+    }
+    const edgeFrac=area?boundary/area:1;
+    // Reject the common non-fruit shapes: thin stems/rachis, long palm leaves and tiny speckles.
+    // Large dense blobs are allowed because touching dates can merge into one color component.
+    const normalFruit=area>=minArea&&bw>=3&&bh>=3&&aspect>=.24&&aspect<=4.1&&fill>=.24&&edgeFrac<=.82;
+    const denseMerged=area>=hugeArea&&aspect>=.28&&aspect<=3.4&&fill>=.36;
+    if(!(normalFruit||denseMerged)) pix.forEach(q=>classes[q]=0);
+  }
+}
+
+function collectDiagnosticComponents(classes,w,h,x0,y0,x1,y1){
+  const out=[],seen=new Uint8Array(w*h),cropArea=Math.max(1,(x1-x0)*(y1-y0));
+  const minArea=Math.max(7,Math.round(cropArea*.000055));
+  for(const code of [1,2,4,5,6]){
+    for(let sy=y0;sy<y1;sy++)for(let sx=x0;sx<x1;sx++){
+      const start=sy*w+sx;if(classes[start]!==code||seen[start])continue;
+      const stack=[start];seen[start]=1;let area=0,minX=sx,maxX=sx,minY=sy,maxY=sy;
+      while(stack.length){const q=stack.pop(),qy=(q/w)|0,qx=q-qy*w;area++;
+        if(qx<minX)minX=qx;if(qx>maxX)maxX=qx;if(qy<minY)minY=qy;if(qy>maxY)maxY=qy;
+        for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){if(!dx&&!dy)continue;const nx=qx+dx,ny=qy+dy;
+          if(nx<x0||nx>=x1||ny<y0||ny>=y1)continue;const ni=ny*w+nx;if(!seen[ni]&&classes[ni]===code){seen[ni]=1;stack.push(ni)}}
+      }
+      if(area>=minArea)out.push({code,area,minX,maxX,minY,maxY});
+    }
+  }
+  return out;
+}
+
+function detectClusterROIs(data,w,h,x0,y0,x1,y1){
+  if(APP.settings.autoROI===false){
+    const mask=new Uint8Array(w*h);
+    for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++)mask[y*w+x]=1;
+    return {rois:[{x0,y0,x1:x1-1,y1:y1-1,score:1}],mask,fallback:true,coverage:1};
+  }
+  const tile=Math.max(12,Math.round(Math.min(w,h)/24));
+  const cols=Math.ceil((x1-x0)/tile),rows=Math.ceil((y1-y0)/tile);
+  const cells=new Array(cols*rows);
+  function ci(cx,cy){return cy*cols+cx}
+  for(let cy=0;cy<rows;cy++)for(let cx=0;cx<cols;cx++){
+    const ax=x0+cx*tile,ay=y0+cy*tile,bx=Math.min(x1,ax+tile),by=Math.min(y1,ay+tile);
+    let n=0,warm=0,green=0,sky=0,dark=0,sg=0,sg2=0;
+    for(let y=ay;y<by;y+=2)for(let x=ax;x<bx;x+=2){
+      const i=(y*w+x)*4,r=data[i],g=data[i+1],b=data[i+2],hsv=rgbToHsv(r,g,b),gray=.299*r+.587*g+.114*b;
+      n++;sg+=gray;sg2+=gray*gray;
+      if(hsv.v<.12){dark++;continue}
+      if((hsv.s<.13&&hsv.v>.78)||(hsv.h>=180&&hsv.h<=260&&hsv.s>.16&&hsv.v>.45)){sky++;continue}
+      if(hsv.s>.14&&hsv.v>.16&&hs
