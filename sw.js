@@ -1,4 +1,4 @@
-const CACHE_NAME='dci-pwa-2.8.0';
+const CACHE_NAME='dci-pwa-2.9.0';
 const FULL_CORE=Array.from({length:8},(_,i)=>`./fullcore280/part${String(i+1).padStart(2,'0')}.txt`);
 const APP_SHELL=['./','./index.html','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png',...FULL_CORE];
 
