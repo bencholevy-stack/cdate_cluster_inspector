@@ -1,4 +1,4 @@
-const CACHE_NAME='dci-pwa-2.8.3';
+const CACHE_NAME='dci-pwa-2.8.4';
 const FULL_CORE=Array.from({length:8},(_,i)=>`./fullcore280/part${String(i+1).padStart(2,'0')}.txt`);
 const APP_SHELL=['./','./index.html','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png',...FULL_CORE];
 self.addEventListener('install',event=>{self.skipWaiting();event.waitUntil(caches.open(CACHE_NAME).then(c=>c.addAll(APP_SHELL)));});
