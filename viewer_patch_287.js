@@ -1,18 +1,18 @@
 (()=>{
 'use strict';
 const PATCH_VERSION='2.8.7';
-const ICON='./icons/navidate-icon.svg';
+const ICON='./icons/icon-192.png';
 
 // --- One visual identity everywhere ---
 let fav=document.querySelector('link[rel~="icon"]');
 if(!fav){fav=document.createElement('link');fav.rel='icon';document.head.appendChild(fav);}
-fav.type='image/svg+xml';fav.href=ICON+'?v=287';
+fav.type='image/png';fav.href=ICON+'?v=287b';
 let apple=document.querySelector('link[rel="apple-touch-icon"]');
 if(!apple){apple=document.createElement('link');apple.rel='apple-touch-icon';document.head.appendChild(apple);}
-apple.href=ICON+'?v=287';
+apple.href=ICON+'?v=287b';
 const logo=document.querySelector('.logo');
 if(logo){
-  logo.innerHTML=`<img src="${ICON}?v=287" alt="NAVIDATE" style="display:block;width:100%;height:100%;object-fit:cover">`;
+  logo.innerHTML=`<img src="${ICON}?v=287b" alt="NAVIDATE" style="display:block;width:100%;height:100%;object-fit:cover">`;
   logo.style.background='none';logo.style.padding='0';logo.style.overflow='hidden';logo.style.color='transparent';
 }
 
